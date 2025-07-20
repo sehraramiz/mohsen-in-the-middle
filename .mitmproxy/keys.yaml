@@ -1,0 +1,11 @@
+-
+  key: R
+  cmd: repeater
+-
+  key: ctrl r
+  ctx: ["flowlist", "flowview"]
+  cmd: repeat
+-
+  key: H
+  ctx: ["flowlist", "flowview"]
+  cmd: highlight
