@@ -1,4 +1,4 @@
-Try mitmproxy as a pre-proxy or alternative to your main intercepting proxy software. you’ll thank yourself later
+Try [mitmproxy](https://github.com/mitmproxy/mitmproxy/) as a pre-proxy or alternative to your main intercepting proxy software. you’ll thank yourself later
 
 1. Install uv
 2. Run `$ uv install` in project's root
