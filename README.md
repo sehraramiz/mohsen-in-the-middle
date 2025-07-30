@@ -30,7 +30,7 @@ def request(flow: http.HTTPFlow):
 ```
 
 ### Addons
-- [Flow Highlighter](./addon/flow_highlighter.py) highlight the focused flow row
-- [Repeater](./addon/repeater.py) like burpsuite repeater (mark flows as R and show/hide them)
-- [Sampler](./addon/sampler.py) to extract json fields, query parameters, headers from request/response flows and save to a file for later fuzzing.
-- [No Noise](./addon/nonoise.py) to drop analytic and ad related request so they dont reach the upstream proxy (BurpSuite/Caido/Zap).
+- [Flow Highlighter](./flow_highlighter.py) highlight the focused flow row
+- [Repeater](./repeater.py) like burpsuite repeater (mark flows as R and show/hide them)
+- [Sampler](./sampler.py) to extract json fields, query parameters, headers from request/response flows and save to a file for later fuzzing.
+- [No Noise](./nonoise.py) to drop analytic and ad related request so they dont reach the upstream proxy (BurpSuite/Caido/Zap).
