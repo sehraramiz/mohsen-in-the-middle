@@ -112,7 +112,12 @@ def toggle_filter(filter: str) -> None:
 
 @command.command("noimage")
 def no_image_cmd() -> None:
-    no_image_view_filter = "!~hs content-type:.*image/.*"
+    no_image_view_filter = (
+        "!~hs content-type:.*image/.*"
+        " & !~u .*\\.jpg.*"
+        " & !~u .*\\.jpeg.*"
+        " & !~u .*\\.png.*"
+    )
     toggle_filter(no_image_view_filter)
 
 
@@ -120,7 +125,7 @@ def no_image_cmd() -> None:
 def no_style() -> None:
     no_style_view_filter = (
         "!~hs content-type:.*text/css"
-        " & !~u .*\\.css.* "
+        " & !~u .*\\.css.*"
         " & !~u .*\\.scss.*"
         " & !~u .*\\.ttf.*"
         " & !~u .*\\.woff.*"
@@ -136,6 +141,7 @@ def no_js_cmd() -> None:
     no_js_view_filter = (
         "!~hs content-type:.*application/javascript.*"
         " & !~hs content-type:.*text/javascript.*"
+        " & !~u .*\\.js.*"
         " & !~u .*\\.js\\.map.*"
     )
     toggle_filter(no_js_view_filter)
