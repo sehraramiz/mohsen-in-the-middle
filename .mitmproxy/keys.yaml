@@ -9,3 +9,10 @@
   key: H
   ctx: ["flowlist", "flowview"]
   cmd: highlight
+-
+  key: T
+  cmd: freezer
+-
+  key: ctrl t
+  ctx: ["flowlist", "flowview"]
+  cmd: freeze
