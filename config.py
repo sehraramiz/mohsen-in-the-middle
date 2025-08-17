@@ -1,4 +1,3 @@
-import uuid
 import re
 from typing import Callable
 from functools import partial
@@ -86,7 +85,7 @@ def load(loader):
 
 @scope()
 def request(flow: http.HTTPFlow):
-    flow.request.headers.setdefault("x-mitm-trace-id", str(uuid.uuid4()))
+    flow.request.headers.setdefault("x-mitm-trace-id", flow.id)
     for header_key, header_value in settings.include_headers:
         flow.request.headers[header_key] = header_value
     for h in settings.remove_headers:
