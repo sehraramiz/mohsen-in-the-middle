@@ -31,10 +31,10 @@ def mark_for_repeater() -> None:
 def show_repeater() -> None:
     """Show repeater (show R marked flows)"""
 
-    show_repeater_filter = "(~marker R)"
+    filter = "((( FILTER:SPECIAL_VIEW_REPEATER | ~marker R )))"
     current_view_filter = ctx.options.view_filter
-    if current_view_filter == show_repeater_filter:
-        ctx.options.view_filter = last_view_filter.get()
-    else:
+    if "SPECIAL_VIEW_REPEATER" in current_view_filter:
+        filter = last_view_filter.get()
+    elif "SPECIAL_VIEW" not in current_view_filter:
         last_view_filter.set(current_view_filter)
-        ctx.options.view_filter = show_repeater_filter
+    ctx.options.view_filter = filter

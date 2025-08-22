@@ -50,10 +50,10 @@ def mark_freeze() -> None:
 
 @command.command("freezer")
 def show_freezer() -> None:
-    show_freezer_filter = "(~meta \"frozen: true\")"
+    filter = "((( FILTER:SPECIAL_VIEW_FREEZER | ~meta \"frozen: true\" )))"
     current_view_filter = ctx.options.view_filter
-    if current_view_filter == show_freezer_filter:
-        ctx.options.view_filter = last_view_filter.get()
-    else:
+    if "SPECIAL_VIEW_FREEZER" in current_view_filter:
+        filter = last_view_filter.get()
+    elif "SPECIAL_VIEW" not in current_view_filter:
         last_view_filter.set(current_view_filter)
-        ctx.options.view_filter = show_freezer_filter
+    ctx.options.view_filter = filter
