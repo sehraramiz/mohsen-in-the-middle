@@ -53,7 +53,7 @@ def scope_filters() -> str:
             if len(include_hosts_filter):
                 include_hosts_filter += " | "
             include_hosts_filter += f"~d {filter_host}"
-        view_filter += f"({include_hosts_filter})"
+        view_filter += f"((( FILTER:SCOPE | {include_hosts_filter} )))"
 
     exclude_hosts_filter = ""
     for filter_host in settings.view_filter_exclude_hosts:
@@ -62,7 +62,7 @@ def scope_filters() -> str:
         exclude_hosts_filter += f"!~d {filter_host}"
 
     if len(exclude_hosts_filter):
-        view_filter += f"& ({exclude_hosts_filter})"
+        view_filter += f"& ((( FILTER:SCOPE | {exclude_hosts_filter} )))"
     other_filters = ""
     for filter in settings.view_filters:
         if other_filters:
@@ -98,7 +98,7 @@ def request(flow: http.HTTPFlow):
 
 def toggle_filter(filter: str) -> None:
     view_filter = ctx.options.view_filter
-    filter = f"({filter})"
+    filter = f"((({filter})))"
     if filter not in view_filter:
         if view_filter:
             view_filter += " & " + filter
@@ -112,7 +112,8 @@ def toggle_filter(filter: str) -> None:
 @command.command("noimage")
 def no_image_cmd() -> None:
     no_image_view_filter = (
-        "!~hs content-type:.*image/.*"
+        "FILTER:NO_IMAGE |"
+        " !~hs content-type:.*image/.*"
         " & !~u .*\\.jpg.*"
         " & !~u .*\\.jpeg.*"
         " & !~u .*\\.png.*"
@@ -123,7 +124,8 @@ def no_image_cmd() -> None:
 @command.command("nostyle")
 def no_style() -> None:
     no_style_view_filter = (
-        "!~hs content-type:.*text/css"
+        "FILTER:NO_STYLE |"
+        " !~hs content-type:.*text/css"
         " & !~u .*\\.css.*"
         " & !~u .*\\.scss.*"
         " & !~u .*\\.ttf.*"
@@ -138,7 +140,8 @@ def no_style() -> None:
 @command.command("nojs")
 def no_js_cmd() -> None:
     no_js_view_filter = (
-        "!~hs content-type:.*application/javascript.*"
+        "FILTER:NO_JS |"
+        " !~hs content-type:.*application/javascript.*"
         " & !~hs content-type:.*text/javascript.*"
         " & !~u .*\\.js.*"
         " & !~u .*\\.js\\.map.*"
