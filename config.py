@@ -27,12 +27,17 @@ class Settings(BaseSettings):
 def scope_decorator(in_scope: list[str], out_scope: list[str]):
     def decorator(func: Callable) -> Callable:
         def wrapper(*args, **kwargs):
-            if len(args) > 1:
+            flow = None
+            if len(args) == 1 and type(args[0]) is http.HTTPFlow:
+                flow = args[0]
+            if len(args) > 1 and type(args[1]) is http.HTTPFlow:
                 flow = args[1]
-                is_in_scope = any(re.search(p, flow.request.host) for p in in_scope)
-                is_out_scope = any(re.search(p, flow.request.host) for p in out_scope)
-                if is_in_scope and not is_out_scope:
-                    return func(*args, **kwargs)
+            if flow is None:
+                return
+            is_in_scope = any(re.search(p, flow.request.host) for p in in_scope)
+            is_out_scope = any(re.search(p, flow.request.host) for p in out_scope)
+            if is_in_scope and not is_out_scope:
+                return func(*args, **kwargs)
         return wrapper
     return decorator
 
