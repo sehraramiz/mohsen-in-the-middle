@@ -21,6 +21,7 @@ def response(flow: http.HTTPFlow):
     freezed_flow = ctx.master.view.get_by_id(freezed_flow_id)
     if freezed_flow:
         flow.response = freezed_flow.response.copy()
+        flow.marked = "f"
 
 
 @command.command("freeze")
