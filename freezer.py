@@ -15,7 +15,8 @@ freezed_flows: ContextVar[dict] = ContextVar("freezed_flows", default={})
 def response(flow: http.HTTPFlow):
     current_freezed_flows = freezed_flows.get()
     req_url = flow.request.pretty_url.split("?")[0]
-    freezed_flow_id = current_freezed_flows.get(req_url)
+    req_key = f"{flow.request.method}-{req_url}"
+    freezed_flow_id = current_freezed_flows.get(req_key)
     if not freezed_flow_id:
         return
     freezed_flow = ctx.master.view.get_by_id(freezed_flow_id)
@@ -31,22 +32,24 @@ def mark_freeze() -> None:
         return
 
     req_url = flow.request.pretty_url.split("?")[0]
+    req_key = f"{flow.request.method}-{req_url}"
     is_frozen = flow.metadata.get("frozen", False)
     current_freezed_flows = freezed_flows.get()
     if is_frozen:
         flow.marked = ""
-        current_freezed_flows.pop(req_url, None)
+        current_freezed_flows.pop(req_key, None)
     else:
         flow.marked = "F"
-        prev_freezed_flow_id = current_freezed_flows.pop(req_url, None)
+        prev_freezed_flow_id = current_freezed_flows.pop(req_key, None)
         if prev_freezed_flow_id:
             prev_freezed_flow = ctx.master.view.get_by_id(prev_freezed_flow_id)
             prev_freezed_flow.marked = ""
             ctx.master.addons.trigger(hooks.UpdateHook([prev_freezed_flow]))
-        current_freezed_flows[req_url] = flow.id
+        current_freezed_flows[req_key] = flow.id
     freezed_flows.set(current_freezed_flows)
     flow.metadata["frozen"] = not is_frozen
-    logging.log(ALERT, f"Freezed {req_url}")
+    logging.log(ALERT, f"Freezed {req_key}")
+    ctx.master.addons.trigger(hooks.UpdateHook([flow]))
 
 
 @command.command("freezer")
