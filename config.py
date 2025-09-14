@@ -127,7 +127,7 @@ def no_image_cmd() -> None:
 
 
 @command.command("nostyle")
-def no_style() -> None:
+def no_style_cmd() -> None:
     no_style_view_filter = (
         "FILTER:NO_STYLE |"
         " !~hs content-type:.*text/css"
@@ -152,6 +152,13 @@ def no_js_cmd() -> None:
         " & !~u .*\\.js\\.map.*"
     )
     toggle_filter(no_js_view_filter)
+
+
+@command.command("nonoise")
+def no_noise() -> None:
+    no_image_cmd()
+    no_style_cmd()
+    no_js_cmd()
 
 
 @command.command("save")
