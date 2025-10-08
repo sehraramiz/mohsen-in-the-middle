@@ -97,8 +97,9 @@ def request(flow: http.HTTPFlow):
         flow.request.headers.pop(h, None)
     if settings.user_agent_suffix:
         user_agent = flow.request.headers.get("User-Agent", "")
-        modified_ua = user_agent + f" {settings.user_agent_suffix}"
-        flow.request.headers["User-Agent"] = modified_ua
+        if settings.user_agent_suffix not in user_agent:
+            modified_ua = user_agent + f" {settings.user_agent_suffix}"
+            flow.request.headers["User-Agent"] = modified_ua
 
 
 def toggle_filter(filter: str) -> None:
