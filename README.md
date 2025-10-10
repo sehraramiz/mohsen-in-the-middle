@@ -23,6 +23,7 @@ Custom Commands:
 - `:highlight` highlight current focused flow
 - `:freeze` freeze a flow
 - `:freezer` show freezed flows
+- `:rotate` rotate upstream tor ip
 
 Set scope on addon with @scope() decorator
 ```python
@@ -37,3 +38,4 @@ def request(flow: http.HTTPFlow):
 - [Sampler](./sampler.py) to extract json fields, query parameters, headers from request/response flows and save to a file for later fuzzing.
 - [No Noise](./nonoise.py) to drop analytic and ad related request so they dont reach the upstream proxy (BurpSuite/Caido/Zap).
 - [Flow Freezer](./freezer.py) to capture and freeze a flow’s response to serve the frozen response for any future requests to the same url.
+- [Rotator](./rotator.py) to use tor as upstream and rotate its ip based on dynamic conditions (e.g., every 100 requests)
