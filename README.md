@@ -3,7 +3,7 @@ Try [mitmproxy](https://github.com/mitmproxy/mitmproxy/) as a pre-proxy or alter
 1. Install uv
 2. Run `$ uv install` in project's root
 3. set `.env` variables
-4. `uv run mitmproxy -s config.py -s flow_highlighter.py -s repeater.py -s nonoise.py -s sampler.py`
+4. `uv run mitmproxy -s config.py -s filter_view.py -s flow_highlighter.py -s repeater.py -s nonoise.py -s sampler.py`
 
 Recommended Key Bindings:
 ```bash

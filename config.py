@@ -38,7 +38,9 @@ def scope_decorator(in_scope: list[str], out_scope: list[str]):
             is_out_scope = any(re.search(p, flow.request.host) for p in out_scope)
             if is_in_scope and not is_out_scope:
                 return func(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
@@ -100,66 +102,6 @@ def request(flow: http.HTTPFlow):
         if settings.user_agent_suffix not in user_agent:
             modified_ua = user_agent + f" {settings.user_agent_suffix}"
             flow.request.headers["User-Agent"] = modified_ua
-
-
-def toggle_filter(filter: str) -> None:
-    view_filter = ctx.options.view_filter
-    filter = f"((({filter})))"
-    if filter not in view_filter:
-        if view_filter:
-            view_filter += " & " + filter
-        else:
-            view_filter = filter
-    else:
-        view_filter = view_filter.replace(f" & {filter}", "")
-    ctx.options.view_filter = view_filter.strip()
-
-
-@command.command("noimage")
-def no_image_cmd() -> None:
-    no_image_view_filter = (
-        "FILTER:NO_IMAGE |"
-        " !~hs content-type:.*image/.*"
-        " & !~u .*\\.jpg.*"
-        " & !~u .*\\.jpeg.*"
-        " & !~u .*\\.png.*"
-    )
-    toggle_filter(no_image_view_filter)
-
-
-@command.command("nostyle")
-def no_style_cmd() -> None:
-    no_style_view_filter = (
-        "FILTER:NO_STYLE |"
-        " !~hs content-type:.*text/css"
-        " & !~u .*\\.css.*"
-        " & !~u .*\\.scss.*"
-        " & !~u .*\\.ttf.*"
-        " & !~u .*\\.woff.*"
-        " & !~u .*\\.woff2.*"
-        " & !~u .*\\.otf.*"
-        " & !~u .*\\.pbf.*"
-    )
-    toggle_filter(no_style_view_filter)
-
-
-@command.command("nojs")
-def no_js_cmd() -> None:
-    no_js_view_filter = (
-        "FILTER:NO_JS |"
-        " !~hs content-type:.*application/javascript.*"
-        " & !~hs content-type:.*text/javascript.*"
-        " & !~u .*\\.js.*"
-        " & !~u .*\\.js\\.map.*"
-    )
-    toggle_filter(no_js_view_filter)
-
-
-@command.command("nonoise")
-def no_noise() -> None:
-    no_image_cmd()
-    no_style_cmd()
-    no_js_cmd()
 
 
 @command.command("save")
