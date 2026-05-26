@@ -1,27 +1,47 @@
+import json
 import re
 from typing import Callable
 from functools import partial
 from datetime import datetime
+from pathlib import Path
 
 from mitmproxy import command
 from mitmproxy import ctx
 from mitmproxy import http
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
 
 
-class Settings(BaseSettings):
-    project_name: str = "ProxyProject"
-    user_agent_suffix: str = ""
-    in_scope: list[str] = Field(default_factory=list)
-    out_scope: list[str] = Field(default_factory=list)
-    view_filter_include_hosts: list[str] = Field(default_factory=list)
-    view_filter_exclude_hosts: list[str] = Field(default_factory=list)
-    view_filters: list[str] = Field(default_factory=list)
-    include_headers: list[list[str]] = Field(default_factory=list)
-    remove_headers: list[str] = Field(default_factory=list)
+class Settings:
+    def __init__(self) -> None:
+        self.project_name: str = "ProxyProject"
+        self.user_agent_suffix: str = ""
+        self.in_scope: list[str] = []
+        self.out_scope: list[str] = []
+        self.view_filter_include_hosts: list[str] = []
+        self.view_filter_exclude_hosts: list[str] = []
+        self.view_filters: list[str] = []
+        self.include_headers: list[list[str]] = []
+        self.remove_headers: list[str] = []
+        self._load_env()
 
-    model_config = SettingsConfigDict(env_file=".env", extra="allow")
+    def _load_env(self) -> None:
+        env_path = Path(".env")
+        if not env_path.exists():
+            return
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                value = value.strip()
+                if not hasattr(self, key):
+                    continue
+                try:
+                    parsed = json.loads(value)
+                except json.JSONDecodeError:
+                    parsed = value
+                setattr(self, key, parsed)
 
 
 def scope_decorator(in_scope: list[str], out_scope: list[str]):

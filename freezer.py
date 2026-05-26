@@ -1,5 +1,4 @@
 import logging
-from contextvars import ContextVar
 
 from mitmproxy import http
 from mitmproxy import ctx
@@ -8,21 +7,23 @@ from mitmproxy import hooks
 from mitmproxy.log import ALERT
 
 
-last_view_filter: ContextVar[str] = ContextVar("last_view_filter", default="")
-freezed_flows: ContextVar[dict] = ContextVar("freezed_flows", default={})
+_last_view_filter: str = ""
+_frozen_flows: dict[str, str] = {}
 
 
 def response(flow: http.HTTPFlow):
-    current_freezed_flows = freezed_flows.get()
     req_url = flow.request.pretty_url.split("?")[0]
     req_key = f"{flow.request.method}-{req_url}"
-    freezed_flow_id = current_freezed_flows.get(req_key)
-    if not freezed_flow_id:
+    frozen_flow_id = _frozen_flows.get(req_key)
+    if not frozen_flow_id:
         return
-    freezed_flow = ctx.master.view.get_by_id(freezed_flow_id)
-    if freezed_flow:
-        flow.response = freezed_flow.response.copy()
-        flow.marked = "f"
+    frozen_flow = ctx.master.view.get_by_id(frozen_flow_id)
+    if frozen_flow:
+        flow.response = frozen_flow.response.copy()
+        flow.marked = "F"
+    else:
+        _frozen_flows.pop(req_key, None)
+        logging.log(ALERT, f"Frozen flow {req_key} was deleted, removing reference")
 
 
 @command.command("freeze")
@@ -34,30 +35,30 @@ def mark_freeze() -> None:
     req_url = flow.request.pretty_url.split("?")[0]
     req_key = f"{flow.request.method}-{req_url}"
     is_frozen = flow.metadata.get("frozen", False)
-    current_freezed_flows = freezed_flows.get()
     if is_frozen:
         flow.marked = ""
-        current_freezed_flows.pop(req_key, None)
+        _frozen_flows.pop(req_key, None)
     else:
         flow.marked = "F"
-        prev_freezed_flow_id = current_freezed_flows.pop(req_key, None)
-        if prev_freezed_flow_id:
-            prev_freezed_flow = ctx.master.view.get_by_id(prev_freezed_flow_id)
-            prev_freezed_flow.marked = ""
-            ctx.master.addons.trigger(hooks.UpdateHook([prev_freezed_flow]))
-        current_freezed_flows[req_key] = flow.id
-    freezed_flows.set(current_freezed_flows)
+        prev_frozen_flow_id = _frozen_flows.pop(req_key, None)
+        if prev_frozen_flow_id:
+            prev_frozen_flow = ctx.master.view.get_by_id(prev_frozen_flow_id)
+            if prev_frozen_flow:
+                prev_frozen_flow.marked = ""
+                ctx.master.addons.trigger(hooks.UpdateHook([prev_frozen_flow]))
+        _frozen_flows[req_key] = flow.id
     flow.metadata["frozen"] = not is_frozen
-    logging.log(ALERT, f"Freezed {req_key}")
+    logging.log(ALERT, f"Frozen {req_key}")
     ctx.master.addons.trigger(hooks.UpdateHook([flow]))
 
 
 @command.command("freezer")
 def show_freezer() -> None:
-    filter = "((( FILTER:SPECIAL_VIEW_FREEZER | ~meta \"frozen: true\" )))"
+    global _last_view_filter
+    freezer_filter = "((( FILTER:SPECIAL_VIEW_FREEZER | ~meta \"frozen: true\" )))"
     current_view_filter = ctx.options.view_filter
-    if "SPECIAL_VIEW_FREEZER" in current_view_filter:
-        filter = last_view_filter.get()
-    elif "SPECIAL_VIEW" not in current_view_filter:
-        last_view_filter.set(current_view_filter)
-    ctx.options.view_filter = filter
+    if "((( FILTER:SPECIAL_VIEW_FREEZER" in current_view_filter:
+        ctx.options.view_filter = _last_view_filter
+    elif "((( FILTER:" not in current_view_filter:
+        _last_view_filter = current_view_filter
+        ctx.options.view_filter = freezer_filter

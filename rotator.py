@@ -1,7 +1,8 @@
-import requests
+import json
 import time
 import socket
 import logging
+import urllib.request
 
 from mitmproxy import command
 from mitmproxy import ctx
@@ -63,16 +64,16 @@ class Rotator:
             ctx.options.update_known(mode=[upstream])
 
     def _get_current_tor_ip(self) -> str | None:
-        proxies = {
-            "http": f"http://{self.tor_host}:{self.tor_http_port}",
-            "https": f"http://{self.tor_host}:{self.tor_http_port}",
-        }
+        proxy_url = f"http://{self.tor_host}:{self.tor_http_port}"
+        proxy_handler = urllib.request.ProxyHandler({
+            "http": proxy_url,
+            "https": proxy_url,
+        })
+        opener = urllib.request.build_opener(proxy_handler)
         try:
-            res = requests.get("https://check.torproject.org/api/ip", proxies=proxies)
-            if res.status_code != 200:
-                return None
-            data = res.json()
-            return data.get("IP")
+            with opener.open("https://check.torproject.org/api/ip", timeout=10) as resp:
+                data = json.loads(resp.read())
+                return data.get("IP")
         except Exception as e:
             logging.error(f"Tor ip fetch failed: {e}")
             return None
