@@ -3,7 +3,7 @@ Try [mitmproxy](https://github.com/mitmproxy/mitmproxy/) as a pre-proxy or alter
 1. Install uv
 2. Run `$ uv install` in project's root
 3. set `.env` variables
-4. `uv run mitmproxy -s config.py -s filter_view.py -s flow_highlighter.py -s repeater.py -s nonoise.py -s sampler.py`
+4. `uv run mitmproxy -s config.py -s filter_view.py -s flow_highlighter.py -s repeater.py -s nonoise.py -s harvester.py`
 
 Recommended Key Bindings:
 ```bash
@@ -35,7 +35,7 @@ def request(flow: http.HTTPFlow):
 ### Addons
 - [Flow Highlighter](./flow_highlighter.py) highlight the focused flow row
 - [Repeater](./repeater.py) like burpsuite repeater (mark flows as R and show/hide them)
-- [Sampler](./sampler.py) to extract json fields, query parameters, headers from request/response flows and save to a file for later fuzzing.
+- [Sampler](./harvester.py) to extract json fields, query parameters, headers from request/response flows and save to a file for later fuzzing.
 - [No Noise](./nonoise.py) to drop analytic and ad related request so they dont reach the upstream proxy (BurpSuite/Caido/Zap).
 - [Flow Freezer](./freezer.py) to capture and freeze a flow’s response to serve the frozen response for any future requests to the same url.
 - [Rotator](./rotator.py) to use tor as upstream and rotate its ip based on dynamic conditions (e.g., every 100 requests)
