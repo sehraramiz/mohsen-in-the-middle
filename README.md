@@ -39,3 +39,4 @@ def request(flow: http.HTTPFlow):
 - [No Noise](./nonoise.py) to drop analytic and ad related request so they dont reach the upstream proxy (BurpSuite/Caido/Zap).
 - [Flow Freezer](./freezer.py) to capture and freeze a flow’s response to serve the frozen response for any future requests to the same url.
 - [Rotator](./rotator.py) to use tor as upstream and rotate its ip based on dynamic conditions (e.g., every 100 requests)
+- [Cache Oracle](./cache_oracle.py) detect cached responses by inspecting response headers for CDN signals (CF-Cache-Status, X-Cache, Age, max-age, custom header regex, hit/miss value patterns)
