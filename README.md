@@ -38,5 +38,40 @@ def request(flow: http.HTTPFlow):
 - [Sampler](./harvester.py) to extract json fields, query parameters, headers from request/response flows and save to a file for later fuzzing.
 - [No Noise](./nonoise.py) to drop analytic and ad related request so they dont reach the upstream proxy (BurpSuite/Caido/Zap).
 - [Flow Freezer](./freezer.py) to capture and freeze a flow’s response to serve the frozen response for any future requests to the same url.
-- [Rotator](./rotator.py) to use tor as upstream and rotate its ip based on dynamic conditions (e.g., every 100 requests)
+- [Rotator](./rotator.py) use Tor as upstream proxy and rotate IPs. See [Tor Setup](#tor-upstream-with-rotator) below.
 - [Cache Oracle](./cache_oracle.py) detect cached responses by inspecting response headers for CDN signals (CF-Cache-Status, X-Cache, Age, max-age, custom header regex, hit/miss value patterns)
+
+
+## Tor upstream with Rotator
+
+Add `-s rotator.py` to the mitmproxy command. It requires a Tor daemon configured with an HTTP tunnel port and a control port.
+
+### 1. Configure torrc
+
+```
+ControlPort 9051
+HashedControlPassword <your-hashed-password>
+HTTPTunnelPort 9080
+```
+
+Generate `HashedControlPassword` with: `tor --hash-password <your-password>`
+
+### 2. Set mitmproxy options
+
+Via CLI `--set` flags:
+```bash
+uv run mitmproxy -s rotator.py --set tor_control_password=<your-password> --set tor_http_port=9080 --set requests_per_ip=1000
+```
+
+Or via the console `:set`:
+```
+:set tor_control_password=<your-password>
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `tor_host` | `127.0.0.1` | Tor daemon host |
+| `tor_http_port` | `9080` | Tor HTTP tunnel port |
+| `tor_control_port` | `9051` | Tor control port |
+| `tor_control_password` | _(empty)_ | Tor control password (required) |
+| `requests_per_ip` | `100` | Requests before automatic IP rotation |

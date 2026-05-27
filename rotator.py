@@ -52,12 +52,15 @@ class Rotator:
         self.tor_control_port = ctx.options.tor_control_port
         self.tor_control_password = ctx.options.tor_control_password
         assert self.tor_control_password, "Must set tor control password"
-        assert (
-            self._tor_is_available()
-        ), f"Check if tor control protocol is available at {self.tor_host} {self.tor_control_port}"
-        assert (
-            self._get_current_tor_ip()
-        ), f"Check if tor proxy is available at {self.tor_host} {self.tor_http_port}"
+        assert self._tor_is_available(), (
+            f"Check if tor control protocol is available at {self.tor_host} {self.tor_control_port}"
+        )
+        assert self._get_current_tor_ip(), (
+            "Check if tor proxy is available at {} {} and connected.".format(
+                self.tor_host,
+                self.tor_http_port,
+            )
+        )
 
         upstream = f"upstream:http://{self.tor_host}:{self.tor_http_port}"
         if not any(upstream in mode for mode in ctx.options.mode):
@@ -65,10 +68,12 @@ class Rotator:
 
     def _get_current_tor_ip(self) -> str | None:
         proxy_url = f"http://{self.tor_host}:{self.tor_http_port}"
-        proxy_handler = urllib.request.ProxyHandler({
-            "http": proxy_url,
-            "https": proxy_url,
-        })
+        proxy_handler = urllib.request.ProxyHandler(
+            {
+                "http": proxy_url,
+                "https": proxy_url,
+            }
+        )
         opener = urllib.request.build_opener(proxy_handler)
         try:
             with opener.open("https://check.torproject.org/api/ip", timeout=10) as resp:
