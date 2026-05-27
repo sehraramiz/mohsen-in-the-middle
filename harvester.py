@@ -89,7 +89,6 @@ class Harvester:
             text = flow_item.content.decode("utf-8")
             if not text or text[0] not in "[{":
                 return
-            print(1111)
             keys = get_all_keys(flow_item.json())
             self._mark_dirty(self.keywords, keys)
         except Exception:
