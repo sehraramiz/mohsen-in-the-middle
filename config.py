@@ -68,6 +68,8 @@ settings = Settings()
 scope = partial(
     scope_decorator, in_scope=settings.in_scope, out_scope=settings.out_scope
 )
+data_dir = Path(f"./{settings.project_name}_data")
+data_dir.mkdir(exist_ok=True)
 
 
 def scope_filters() -> str:
