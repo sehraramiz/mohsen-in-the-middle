@@ -3,6 +3,8 @@ import re
 from mitmproxy.http import HTTPFlow
 
 drop_hosts = [
+    r".*\.yektanet\.com$",
+    r".*\.intrack\.ir$",
     r".*\.tavoos\.net$",
     r".*\.mediaad\.org$",
     r".*\.webengage\.com$",
