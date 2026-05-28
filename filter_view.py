@@ -27,7 +27,7 @@ class FilterPreset:
 
 
 _PRESETS: dict[str, FilterPreset] = {}
-_BASE_VIEW_FILTER: str = "~all"
+_base_view_filter: str = "~all"
 
 _RE_NOIMAGE_URL = re.compile(r"\.(jpg|jpeg|png|webp|gif|svg|ico|bmp|avif)")
 _RE_NOSTYLE_URL = re.compile(r"\.(css|scss|ttf|woff2?|otf|pbf)")
@@ -87,13 +87,13 @@ def _rebuild_view_filter() -> None:
         if p.enabled:
             blocks.append(f'((({p.label} | !~meta "{p.meta_key}: true")))')
     if not blocks:
-        ctx.options.view_filter = _BASE_VIEW_FILTER
+        ctx.options.view_filter = _base_view_filter
     else:
         combined = " & ".join(blocks)
-        if _BASE_VIEW_FILTER == "~all":
+        if _base_view_filter == "~all":
             ctx.options.view_filter = combined
         else:
-            ctx.options.view_filter = _BASE_VIEW_FILTER + " & " + combined
+            ctx.options.view_filter = _base_view_filter + " & " + combined
 
 
 def _toggle(name: str) -> None:
@@ -126,8 +126,9 @@ def response(flow: http.HTTPFlow) -> None:
 
 
 def load(loader: Loader) -> None:
-    global _BASE_VIEW_FILTER
-    _BASE_VIEW_FILTER = ctx.options.view_filter
+    global _base_view_filter
+    if ctx.options.view_filter:
+        _base_view_filter = ctx.options.view_filter
     for flow in ctx.master.view:
         _tag_flow(flow)
     logging.log(ALERT, "Filter view addon loaded")
