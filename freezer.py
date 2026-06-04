@@ -56,7 +56,7 @@ def mark_freeze() -> None:
 def show_freezer() -> None:
     global _last_view_filter
     freezer_filter = "((( FILTER:SPECIAL_VIEW_FREEZER | ~meta \"frozen: true\" )))"
-    current_view_filter = ctx.options.view_filter
+    current_view_filter = ctx.options.view_filter or ""
     if "((( FILTER:SPECIAL_VIEW_FREEZER" in current_view_filter:
         ctx.options.view_filter = _last_view_filter
     elif "((( FILTER:" not in current_view_filter:
