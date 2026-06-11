@@ -59,6 +59,6 @@ def show_freezer() -> None:
     current_view_filter = ctx.options.view_filter or ""
     if "((( FILTER:SPECIAL_VIEW_FREEZER" in current_view_filter:
         ctx.options.view_filter = _last_view_filter
-    elif "((( FILTER:" not in current_view_filter:
+    else:
         _last_view_filter = current_view_filter
         ctx.options.view_filter = freezer_filter
