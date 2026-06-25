@@ -8,6 +8,7 @@ from pathlib import Path
 from mitmproxy import command
 from mitmproxy import ctx
 from mitmproxy import http
+from mitmproxy.addonmanager import Loader
 
 
 class Settings:
@@ -21,6 +22,7 @@ class Settings:
         self.view_filters: list[str] = []
         self.include_headers: list[list[str]] = []
         self.remove_headers: list[str] = []
+        self.remove_cookies: list[str] = []
         self._load_env()
 
     def _load_env(self) -> None:
@@ -102,7 +104,7 @@ def scope_filters() -> str:
     return view_filter
 
 
-def load(loader):
+def load(loader: Loader) -> None:
     ctx.options.update_known(
         anticache=True,
         view_order="time",
@@ -112,8 +114,27 @@ def load(loader):
     )
 
 
+def request(flow: http.HTTPFlow) -> None:
+    if settings.remove_cookies:
+        cookie = flow.request.headers.get("Cookie", "")
+        if cookie:
+            parts = [c.strip() for c in cookie.split(";") if c.strip()]
+            kept = [
+                p
+                for p in parts
+                if not any(
+                    re.search(pat, p.split("=", 1)[0].strip())
+                    for pat in settings.remove_cookies
+                )
+            ]
+            if kept:
+                flow.request.headers["Cookie"] = "; ".join(kept)
+            else:
+                flow.request.headers.pop("Cookie", None)
+
+
 @scope()
-def request(flow: http.HTTPFlow):
+def request(flow: http.HTTPFlow) -> None:
     flow.request.headers.setdefault("x-mitm-trace-id", flow.id)
 
     for header_key, header_value in settings.include_headers:
@@ -125,6 +146,26 @@ def request(flow: http.HTTPFlow):
         if settings.user_agent_suffix not in user_agent:
             modified_ua = user_agent + f" {settings.user_agent_suffix}"
             flow.request.headers["User-Agent"] = modified_ua
+
+
+def response(flow: http.HTTPFlow) -> None:
+    if not settings.remove_cookies:
+        return
+    set_cookies = flow.response.headers.get_all("set-cookie")
+    if not set_cookies:
+        return
+    kept = [
+        sc
+        for sc in set_cookies
+        if not any(
+            re.search(pat, sc.split("=", 1)[0].strip())
+            for pat in settings.remove_cookies
+        )
+    ]
+    if kept:
+        flow.response.headers.set_all("set-cookie", kept)
+    else:
+        flow.response.headers.pop("set-cookie", None)
 
 
 @command.command("save")
