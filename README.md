@@ -1,4 +1,4 @@
-<img src="highlighter.gif" width="600" alt="Highlighter demo">
+<img src="highlighter.gif" width="100%" alt="Highlighter demo">
 
 Try [mitmproxy](https://github.com/mitmproxy/mitmproxy/) as a pre-proxy or alternative to your main intercepting proxy software. you’ll thank yourself later
 
@@ -35,7 +35,11 @@ def request(flow: http.HTTPFlow):
 ```
 
 ### Addons
-- [Flow Highlighter](./flow_highlighter.py) highlight the focused flow row
+- [Flow Highlighter](./flow_highlighter.py) — monkey-patches the flow list view to add row background colors. Commands:
+  - `:highlight` — toggle red highlight on the focused flow
+  - `:highlight <color>` — set highlight to a specific color
+  - `:highlight list` — list available colors
+  - Colors: red, orange, yellow, green, blue, pink, gray
 - [Repeater](./repeater.py) like burpsuite repeater (mark flows as R and show/hide them)
 - [Sampler](./harvester.py) to extract json fields, query parameters, headers from request/response flows and save to a file for later fuzzing.
 - [No Noise](./nonoise.py) to drop analytic and ad related request so they dont reach the upstream proxy (BurpSuite/Caido/Zap).
