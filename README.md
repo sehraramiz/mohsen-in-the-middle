@@ -1,3 +1,5 @@
+<img src="highlighter.gif" width="600" alt="Highlighter demo">
+
 Try [mitmproxy](https://github.com/mitmproxy/mitmproxy/) as a pre-proxy or alternative to your main intercepting proxy software. you’ll thank yourself later
 
 1. Install uv
