@@ -49,6 +49,8 @@ class CacheOracle:
 
     @scope()
     def response(self, flow: HTTPFlow):
+        if flow.request.method == "OPTIONS":
+            return
         cache_log_file = data_dir / "cache_oracles.log"
         log_parts: list[str] = []
         headers = flow.response.headers
@@ -100,7 +102,14 @@ class CacheOracle:
                 log_parts.append(f"{key_lower}: {val_lower}")
                 found_maxage = True
 
-            if found_cdn and found_custom and found_hit and found_token and found_age and found_maxage:
+            if (
+                found_cdn
+                and found_custom
+                and found_hit
+                and found_token
+                and found_age
+                and found_maxage
+            ):
                 break
 
         if log_parts:
