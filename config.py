@@ -62,6 +62,12 @@ class Settings:
                 setattr(self, key, parsed)
 
 
+def host_in_scope(host: str) -> bool:
+    in_scope = any(re.search(p, host) for p in settings.in_scope)
+    out_scope = any(re.search(p, host) for p in settings.out_scope)
+    return in_scope and not out_scope
+
+
 def scope_decorator(in_scope: list[str], out_scope: list[str]):
     def decorator(func: Callable) -> Callable:
         def wrapper(*args, **kwargs):
@@ -86,6 +92,8 @@ settings = Settings()
 scope = partial(
     scope_decorator, in_scope=settings.in_scope, out_scope=settings.out_scope
 )
+
+
 data_dir = Path(f"./{settings.project_name}_data")
 data_dir.mkdir(exist_ok=True)
 
