@@ -20,11 +20,13 @@ CDN_CACHE_HEADERS = {
 
 _CACHE_VALUE_PAT = re.compile(
     r"(hit|miss|stale|fresh|expired|bypass|dynamic|tcp_hit|tcp_miss|"
-    r"tcp_refresh_hit|tcp_ims_hit|tcp_denied|served_from|hit_from|miss_from)"
+    r"tcp_refresh_hit|tcp_ims_hit|tcp_denied|served_from|hit_from|miss_from)",
+    re.IGNORECASE,
 )
 
 _CDN_KEY_PAT = re.compile(
-    r"(cache|edge|cdn|proxy|varnish|upstream|result|status|x-cache|x-hit)"
+    r"(cache|edge|cdn|proxy|varnish|upstream|result|status|x-cache|x-hit)",
+    re.IGNORECASE,
 )
 
 
