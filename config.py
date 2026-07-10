@@ -1,10 +1,12 @@
 import json
 import re
+import logging
 from typing import Callable
 from functools import partial
 from datetime import datetime
 from pathlib import Path
 
+from mitmproxy.log import ALERT
 from mitmproxy import command
 from mitmproxy import ctx
 from mitmproxy import http
@@ -24,6 +26,24 @@ class Settings:
         self.remove_headers: list[str] = []
         self.remove_cookies: list[str] = []
         self._load_env()
+        self._load_scope_files()
+
+    def _load_scope_files(self) -> None:
+        for fname, target in [("inscope", self.in_scope), ("outscope", self.out_scope)]:
+            path = Path(fname)
+            if not path.exists():
+                continue
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    pattern = re.escape(line).replace(r"\*", ".*") + "$"
+                    target.append(pattern)
+                    if target is self.in_scope:
+                        host = line.removeprefix("*.")
+                        if host not in self.view_filter_include_hosts:
+                            self.view_filter_include_hosts.append(host)
 
     def _load_env(self) -> None:
         env_path = Path(".env")
@@ -166,6 +186,26 @@ def response(flow: http.HTTPFlow) -> None:
         flow.response.headers.set_all("set-cookie", kept)
     else:
         flow.response.headers.pop("set-cookie", None)
+
+
+@command.command("scopes")
+def show_scopes() -> None:
+    lines = ["Scope patterns:"]
+    lines.append("")
+    lines.append("  In-scope:")
+    if settings.in_scope:
+        for p in settings.in_scope:
+            lines.append(f"    {p}")
+    else:
+        lines.append("    (none)")
+    lines.append("")
+    lines.append("  Out-scope:")
+    if settings.out_scope:
+        for p in settings.out_scope:
+            lines.append(f"    {p}")
+    else:
+        lines.append("    (none)")
+    logging.log(ALERT, "\n".join(lines))
 
 
 @command.command("save")
