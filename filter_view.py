@@ -27,7 +27,6 @@ class FilterPreset:
 
 
 _PRESETS: dict[str, FilterPreset] = {}
-_base_view_filter: str = "~all"
 
 _RE_NOIMAGE_URL = re.compile(r"\.(jpg|jpeg|png|webp|gif|svg|ico|bmp|avif)")
 _RE_NOSTYLE_URL = re.compile(r"\.(css|scss|ttf|woff2?|otf|pbf)")
@@ -82,18 +81,21 @@ def _tag_flow(flow: http.HTTPFlow) -> None:
 
 
 def _rebuild_view_filter() -> None:
+    current = ctx.options.view_filter or "~all"
+
     blocks: list[str] = []
     for p in _PRESETS.values():
+        block = f'((({p.label} | !~meta "{p.meta_key}: true")))'
+        current = current.replace(f" & {block}", "").replace(block, "").strip(" &")
         if p.enabled:
-            blocks.append(f'((({p.label} | !~meta "{p.meta_key}: true")))')
+            blocks.append(block)
+
     if not blocks:
-        ctx.options.view_filter = _base_view_filter
+        ctx.options.view_filter = current or "~all"
+    elif not current or current == "~all":
+        ctx.options.view_filter = " & ".join(blocks)
     else:
-        combined = " & ".join(blocks)
-        if _base_view_filter == "~all":
-            ctx.options.view_filter = combined
-        else:
-            ctx.options.view_filter = _base_view_filter + " & " + combined
+        ctx.options.view_filter = current + " & " + " & ".join(blocks)
 
 
 def _toggle(name: str) -> None:
@@ -106,12 +108,15 @@ def _toggle(name: str) -> None:
 
 
 def _toggle_multiple(names: list[str]) -> None:
-    changed: list[str] = []
-    for name in names:
-        preset = _PRESETS.get(name)
-        if preset:
-            preset.enabled = not preset.enabled
-            changed.append(f"'{name}' {'enabled' if preset.enabled else 'disabled'}")
+    presets = [_PRESETS[n] for n in names if n in _PRESETS]
+    if not presets:
+        return
+    target = not any(p.enabled for p in presets)
+    changed = []
+    for p in presets:
+        if p.enabled != target:
+            p.enabled = target
+            changed.append(f"'{p.name}' {'enabled' if target else 'disabled'}")
     if changed:
         logging.log(ALERT, ", ".join(changed))
         _rebuild_view_filter()
@@ -126,9 +131,6 @@ def response(flow: http.HTTPFlow) -> None:
 
 
 def load(loader: Loader) -> None:
-    global _base_view_filter
-    if ctx.options.view_filter:
-        _base_view_filter = ctx.options.view_filter
     for flow in ctx.master.view:
         _tag_flow(flow)
     logging.log(ALERT, "Filter view addon loaded")
