@@ -93,6 +93,8 @@ scope = partial(
 data_dir = Path(f"./{settings.project_name}_data")
 data_dir.mkdir(exist_ok=True)
 
+session_start = datetime.now()
+
 
 def scope_filters() -> str:
     view_filter = ""
@@ -214,3 +216,14 @@ def save_flows() -> None:
     ctx.master.commands.call_strings(
         "save.file", ["@shown", f"./files/mitm/flows.{date_str}"]
     )
+
+
+def done() -> None:
+    elapsed = datetime.now() - session_start
+    hours = elapsed.total_seconds() / 3600
+    log_path = data_dir / "sessions.log"
+    with open(log_path, "a") as f:
+        f.write(
+            f"{session_start.isoformat()},{datetime.now().isoformat()},{hours:.2f},{settings.project_name}\n"
+        )
+    logging.log(ALERT, f"Session ended: {hours:.2f}h")
