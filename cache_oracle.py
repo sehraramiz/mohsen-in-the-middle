@@ -116,7 +116,7 @@ class CacheOracle:
 
         if log_parts:
             self._log_buffer.append(
-                f"{flow.id}|{flow.request.pretty_url}|{'|'.join(log_parts)}\n"
+                f"{flow.id}|{flow.response.status_code}|{flow.request.pretty_url}|{'|'.join(log_parts)}\n"
             )
             if len(self._log_buffer) >= _FLUSH_INTERVAL:
                 self._flush_log(cache_log_file)
