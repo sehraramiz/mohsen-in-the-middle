@@ -29,6 +29,7 @@ class Harvester:
         self.keywords = set()
         self.header_keywords = set()
         self.xheader_keywords = set()
+        self.cookie_keywords = set()
         self._dirty = False
         self.data_dir_name = f"{settings.project_name}_data"
 
@@ -41,7 +42,15 @@ class Harvester:
         self.xheader_words_path = Path(
             f"./{self.data_dir_name}/{settings.project_name}.xheader.words.txt"
         )
-        for path in [self.words_path, self.header_words_path, self.xheader_words_path]:
+        self.cookie_words_path = Path(
+            f"./{self.data_dir_name}/{settings.project_name}.cookie.words.txt"
+        )
+        for path in [
+            self.words_path,
+            self.header_words_path,
+            self.xheader_words_path,
+            self.cookie_words_path,
+        ]:
             if not path.parent.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
             if not path.exists():
@@ -53,6 +62,7 @@ class Harvester:
             (self.words_path, self.keywords),
             (self.header_words_path, self.header_keywords),
             (self.xheader_words_path, self.xheader_keywords),
+            (self.cookie_words_path, self.cookie_keywords),
         ]:
             with open(path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -65,6 +75,7 @@ class Harvester:
             (self.words_path, self.keywords),
             (self.header_words_path, self.header_keywords),
             (self.xheader_words_path, self.xheader_keywords),
+            (self.cookie_words_path, self.cookie_keywords),
         ]:
             with open(path, "w", encoding="utf-8") as f:
                 for word in sorted(source):
@@ -103,10 +114,16 @@ class Harvester:
         x_headers = {h for h in headers if h.lower().startswith("x")}
         self._mark_dirty(self.xheader_keywords, x_headers)
 
+    def _extract_cookie_keywords(self, cookies) -> None:
+        names = list(cookies.keys())
+        self._mark_dirty(self.keywords, names)
+        self._mark_dirty(self.cookie_keywords, names)
+
     @scope()
     def request(self, flow: HTTPFlow):
         self._extract_header_keywords(list(flow.request.headers.keys()))
         self._extract_json_keywords(flow.request, host=flow.request.host)
+        self._extract_cookie_keywords(flow.request.cookies)
 
         query_params = list(flow.request.query.keys())
         self._mark_dirty(self.keywords, query_params)
@@ -116,6 +133,7 @@ class Harvester:
     def response(self, flow: HTTPFlow):
         self._extract_header_keywords(list(flow.response.headers.keys()))
         self._extract_json_keywords(flow.response, host=flow.request.host)
+        self._extract_cookie_keywords(flow.response.cookies)
         self.persist()
 
 
