@@ -160,7 +160,7 @@ def request(flow: http.HTTPFlow) -> None:
     flow.request.headers.setdefault("x-mitm-trace-id", flow.id)
 
     for header_key, header_value in settings.include_headers:
-        flow.request.headers[header_key] = header_value
+        flow.request.headers[header_key.lower()] = header_value
     for h in settings.remove_headers:
         flow.request.headers.pop(h, None)
     if settings.user_agent_suffix:
