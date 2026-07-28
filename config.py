@@ -40,10 +40,6 @@ class Settings:
                         continue
                     pattern = re.escape(line).replace(r"\*", ".*") + "$"
                     target.append(pattern)
-                    if target is self.in_scope:
-                        host = line.removeprefix("*.")
-                        if host not in self.view_filter_include_hosts:
-                            self.view_filter_include_hosts.append(host)
 
     def _load_env(self) -> None:
         env_path = Path(".env")
