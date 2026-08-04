@@ -85,7 +85,7 @@ def _rebuild_view_filter() -> None:
 
     blocks: list[str] = []
     for p in _PRESETS.values():
-        block = f'((({p.label} | !~meta "{p.meta_key}: true")))'
+        block = f'(((!~meta "{p.meta_key}: true")))'
         current = current.replace(f" & {block}", "").replace(block, "").strip(" &")
         if p.enabled:
             blocks.append(block)

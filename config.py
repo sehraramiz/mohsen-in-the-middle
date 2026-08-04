@@ -102,7 +102,7 @@ def scope_filters() -> str:
             if len(include_hosts_filter):
                 include_hosts_filter += " | "
             include_hosts_filter += f"~d {filter_host}"
-        view_filter += f"((( FILTER:SCOPE | {include_hosts_filter} )))"
+        view_filter += f"((({include_hosts_filter})))"
 
     exclude_hosts_filter = ""
     for filter_host in settings.view_filter_exclude_hosts:
@@ -111,7 +111,7 @@ def scope_filters() -> str:
         exclude_hosts_filter += f"!~d {filter_host}"
 
     if len(exclude_hosts_filter):
-        view_filter += f"& ((( FILTER:SCOPE | {exclude_hosts_filter} )))"
+        view_filter += f"& ((({exclude_hosts_filter})))"
     other_filters = ""
     for filter in settings.view_filters:
         if other_filters:
