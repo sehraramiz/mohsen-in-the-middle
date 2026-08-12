@@ -95,7 +95,7 @@ def _rebuild_view_filter() -> None:
     elif not current or current == "~all":
         ctx.options.view_filter = " & ".join(blocks)
     else:
-        ctx.options.view_filter = current + " & " + " & ".join(blocks)
+        ctx.options.view_filter = " & ".join(blocks) + " & " + current
 
 
 def _toggle(name: str) -> None:
