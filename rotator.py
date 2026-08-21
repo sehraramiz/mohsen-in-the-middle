@@ -45,6 +45,12 @@ class Rotator:
             default=100,
             help="After how many requests you want a new ip",
         )
+        loader.add_option(
+            name="rotate_on_status_code",
+            typespec=int,
+            default=429,
+            help="Rotate ip when a response with this status code is seen",
+        )
 
     def running(self):
         self.tor_host = ctx.options.tor_host
@@ -130,6 +136,12 @@ class Rotator:
             self.requests_with_current_ip = 0
         else:
             self.requests_with_current_ip += 1
+
+    def response(self, flow: HTTPFlow) -> None:
+        if flow.response.status_code == ctx.options.rotate_on_status_code:
+            logging.log(ALERT, f"rotating ip on status {flow.response.status_code}")
+            self._get_new_ip()
+            self.requests_with_current_ip = 0
 
     @command.command("rotate")
     def rotate_ip(self) -> None:

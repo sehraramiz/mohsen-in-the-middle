@@ -81,3 +81,4 @@ Or via the console `:set`:
 | `tor_control_port` | `9051` | Tor control port |
 | `tor_control_password` | _(empty)_ | Tor control password (required) |
 | `requests_per_ip` | `100` | Requests before automatic IP rotation |
+| `rotate_on_status_code` | `429` | Rotate IP on a response with this status code (e.g. rate-limited) |
