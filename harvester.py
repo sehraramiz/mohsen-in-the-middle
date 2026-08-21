@@ -1,4 +1,5 @@
 from typing import Any
+import json
 import logging
 from pathlib import Path
 
@@ -30,6 +31,7 @@ class Harvester:
         self.header_keywords = set()
         self.xheader_keywords = set()
         self.cookie_keywords = set()
+        self.ws_keywords = set()
         self._dirty = False
         self.data_dir_name = f"{settings.project_name}_data"
 
@@ -45,11 +47,15 @@ class Harvester:
         self.cookie_words_path = Path(
             f"./{self.data_dir_name}/{settings.project_name}.cookie.words.txt"
         )
+        self.ws_words_path = Path(
+            f"./{self.data_dir_name}/{settings.project_name}.websocket.words.txt"
+        )
         for path in [
             self.words_path,
             self.header_words_path,
             self.xheader_words_path,
             self.cookie_words_path,
+            self.ws_words_path,
         ]:
             if not path.parent.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,6 +69,7 @@ class Harvester:
             (self.header_words_path, self.header_keywords),
             (self.xheader_words_path, self.xheader_keywords),
             (self.cookie_words_path, self.cookie_keywords),
+            (self.ws_words_path, self.ws_keywords),
         ]:
             with open(path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -76,6 +83,7 @@ class Harvester:
             (self.header_words_path, self.header_keywords),
             (self.xheader_words_path, self.xheader_keywords),
             (self.cookie_words_path, self.cookie_keywords),
+            (self.ws_words_path, self.ws_keywords),
         ]:
             with open(path, "w", encoding="utf-8") as f:
                 for word in sorted(source):
@@ -88,26 +96,25 @@ class Harvester:
         if len(container) > before:
             self._dirty = True
 
-    def _extract_json_keywords(self, flow_item, host: str) -> None:
+    def _extract_json_text(self, text: str, host: str) -> set[str]:
+        if not text or text[0] not in "[{":
+            return set()
+        if len(text) > MAX_JSON_SIZE:
+            return set()
         try:
-            content_type = flow_item.headers.get("content-type", "")
-            if "json" not in content_type:
-                return
-            if not flow_item.content:
-                return
-            if len(flow_item.content) > MAX_JSON_SIZE:
-                return
-            text = flow_item.content.decode("utf-8")
-            if not text or text[0] not in "[{":
-                return
-            keys = get_all_keys(flow_item.json())
-            self._mark_dirty(self.keywords, keys)
+            return get_all_keys(json.loads(text))
         except Exception:
-            logging.exception(
-                "Error extracting JSON keys from %s %s",
-                host,
-                getattr(flow_item, "path", ""),
-            )
+            logging.exception("Error extracting JSON keys from %s", host)
+            return set()
+
+    def _extract_json_keywords(self, flow_item, host: str) -> None:
+        content_type = flow_item.headers.get("content-type", "")
+        if "json" not in content_type:
+            return
+        if not flow_item.content:
+            return
+        keys = self._extract_json_text(flow_item.content.decode("utf-8"), host)
+        self._mark_dirty(self.keywords, keys)
 
     def _extract_header_keywords(self, headers: list[str]) -> None:
         self._mark_dirty(self.header_keywords, headers)
@@ -136,5 +143,16 @@ class Harvester:
         self._extract_cookie_keywords(flow.response.cookies)
         self.persist()
 
+    @scope()
+    def websocket_message(self, flow: HTTPFlow):
+        if not flow.websocket:
+            return
+        message = flow.websocket.messages[-1]
+        if not message.is_text or not message.content:
+            return
+        keys = self._extract_json_text(message.text, flow.request.host)
+        if keys:
+            self._mark_dirty(self.ws_keywords, keys)
+            self.persist()
 
 addons = [Harvester()]
