@@ -1,3 +1,4 @@
+import functools
 import hashlib
 import json
 import logging
@@ -44,6 +45,14 @@ _CHROME_CANDIDATES: list[str] = [
 ]
 _chrome_path: str | None = next(
     (c for c in _CHROME_CANDIDATES if shutil.which(c)), None
+)
+
+_TARGET_TYPES: tuple[str, ...] = (
+    "page",
+    "iframe",
+    "service_worker",
+    "worker",
+    "shared_worker",
 )
 
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -208,6 +217,7 @@ class CdpManager:
         self._enabled: bool = False
         self._user_disabled: bool = False
         self._launched_chrome: bool = False
+        self._chrome_up: bool = False
         self._stop: bool = False
         register(self)
 
@@ -233,31 +243,39 @@ class CdpManager:
         threading.Thread(target=self._poll_loop, daemon=True).start()
         logger.info("cdp: started, scanning %s:%d", CDP_HOST, CDP_PORT)
 
+    def _launch_chrome(self) -> None:
+        if not _chrome_path:
+            logger.warning("cdp: chrome binary not found")
+            return
+        self._launched_chrome = True
+        logger.warning(
+            "cdp: launching %s --remote-debugging-port=%d",
+            _chrome_path,
+            CDP_PORT,
+        )
+        args = [_chrome_path, f"--remote-debugging-port={CDP_PORT}"]
+        user_dir = os.path.expanduser(os.path.expandvars(CDP_USER_DATA_DIR))
+        if user_dir:
+            args.append(f"--user-data-dir={user_dir}")
+        subprocess.Popen(
+            args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
     def _poll_loop(self) -> None:
         delay: float = 1.0
         while not self._stop:
             targets: list[dict] | None = self._fetch_targets()
             if targets is not None:
+                self._chrome_up = True
                 self._sync_tabs(targets)
                 delay = 1.0
             else:
+                self._chrome_up = False
                 self._sync_tabs([])
-                if CDP_AUTO_LAUNCH and not self._launched_chrome and _chrome_path:
-                    self._launched_chrome = True
-                    logger.warning(
-                        "cdp: launching %s --remote-debugging-port=%d",
-                        _chrome_path,
-                        CDP_PORT,
-                    )
-                    args = [_chrome_path, f"--remote-debugging-port={CDP_PORT}"]
-                    user_dir = os.path.expanduser(os.path.expandvars(CDP_USER_DATA_DIR))
-                    if user_dir:
-                        args.append(f"--user-data-dir={user_dir}")
-                    subprocess.Popen(
-                        args,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                if CDP_AUTO_LAUNCH and not self._launched_chrome:
+                    self._launch_chrome()
                 logger.warning(
                     "cdp: Chrome unreachable on %s:%d, retrying in %ds...",
                     CDP_HOST,
@@ -275,7 +293,8 @@ class CdpManager:
                 f"http://{CDP_HOST}:{CDP_PORT}/json",
                 headers={"User-Agent": "mitmproxy-cdp"},
             )
-            with urllib.request.urlopen(req, timeout=CDP_TIMEOUT) as resp:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=CDP_TIMEOUT) as resp:
                 return json.loads(resp.read())
         except Exception:
             return None
@@ -283,7 +302,8 @@ class CdpManager:
     def _sync_tabs(self, targets: list[dict]) -> None:
         current_ids: set[str] = set()
         for t in targets:
-            if t.get("type") != "page":
+            target_type: str = t.get("type") or "page"
+            if target_type not in _TARGET_TYPES:
                 continue
             tid: str | None = t.get("id")
             ws_url: str | None = t.get("webSocketDebuggerUrl")
@@ -291,7 +311,7 @@ class CdpManager:
                 continue
             current_ids.add(tid)
             if tid not in self._tabs:
-                self._connect_tab(ws_url, t)
+                self._connect_tab(ws_url, t, target_type)
 
         dead_ids: set[str] = set(self._tabs) - current_ids
         for tid in dead_ids:
@@ -299,13 +319,16 @@ class CdpManager:
             logger.info("cdp: tab closed %s", tab.url)
             tab.shutdown()
 
-    def _connect_tab(self, ws_url: str, target_info: dict) -> None:
-        tab: Tab = Tab(ws_url, target_info, CDP_TIMEOUT, self._on_script_internal)
+    def _connect_tab(self, ws_url: str, target_info: dict, target_type: str) -> None:
+        on_script = functools.partial(self._on_script_internal, target_type)
+        tab: Tab = Tab(ws_url, target_info, CDP_TIMEOUT, on_script)
         thread: threading.Thread = threading.Thread(target=tab.run, daemon=True)
         self._tabs[target_info["id"]] = (tab, thread)
         thread.start()
 
-    def _on_script_internal(self, source: str, url: str, script_id: str) -> None:
+    def _on_script_internal(
+        self, target_type: str, source: str, url: str, script_id: str
+    ) -> None:
         host: str = urlparse(url).hostname or "unknown"
         if not host_in_scope(host):
             return
@@ -317,7 +340,9 @@ class CdpManager:
         if script_name.endswith(".js"):
             script_name = script_name[:-3]
 
-        filepath: Path = DATA_DIR / f"{safe_host}_{script_name}_{content_hash}.js"
+        filepath: Path = (
+            DATA_DIR / f"{safe_host}_{target_type}_{script_name}_{content_hash}.js"
+        )
         if filepath.exists():
             return
         try:
@@ -340,13 +365,24 @@ class CdpManager:
             self._user_disabled = False
             self._start()
             logger.warning("cdp: enabled")
+        elif action == "launch":
+            self._launch_chrome()
+            logger.warning("cdp: launch requested")
         elif action == "status":
             if self._enabled:
-                logger.warning(
-                    "cdp: connected (%d tabs, %d scripts saved)",
-                    len(self._tabs),
-                    self._script_count,
-                )
+                if self._chrome_up:
+                    logger.warning(
+                        "cdp: connected (%d tabs, %d scripts saved)",
+                        len(self._tabs),
+                        self._script_count,
+                    )
+                else:
+                    logger.warning(
+                        "cdp: Chrome unreachable on %s:%d (try :cdp launch) — %d scripts saved",
+                        CDP_HOST,
+                        CDP_PORT,
+                        self._script_count,
+                    )
             elif self._user_disabled:
                 logger.warning("cdp: disabled by user")
             else:
@@ -356,7 +392,7 @@ class CdpManager:
                     CDP_PORT,
                 )
         else:
-            logger.warning("usage: :cdp on|off|status")
+            logger.warning("usage: :cdp on|off|status|launch")
 
 
 addons: list[CdpManager] = [CdpManager.instance()]
