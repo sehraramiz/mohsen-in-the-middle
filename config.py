@@ -15,7 +15,7 @@ from mitmproxy.addonmanager import Loader
 
 class Settings:
     def __init__(self) -> None:
-        self.project_name: str = "ProxyProject"
+        self.project_name = Path.cwd().name
         self.user_agent_suffix: str = ""
         self.in_scope: list[str] = []
         self.out_scope: list[str] = []
