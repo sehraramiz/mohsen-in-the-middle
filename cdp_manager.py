@@ -55,7 +55,66 @@ _TARGET_TYPES: tuple[str, ...] = (
     "shared_worker",
 )
 
+_EXTENSION_SCHEMES: frozenset[str] = frozenset(
+    {"chrome-extension", "moz-extension", "edge-extension"}
+)
+
 _executor = ThreadPoolExecutor(max_workers=4)
+
+_index_lock = threading.Lock()
+INDEX_FILE: Path = DATA_DIR / "index.jsonl"
+
+
+def _slug(value: str, max_len: int = 40) -> str:
+    value = re.sub(r"[^a-zA-Z0-9._-]+", "_", value or "")
+    value = re.sub(r"_+", "_", value).strip("_")
+    if len(value) > max_len:
+        value = value[:max_len].rstrip("._-")
+    return value
+
+
+def _page_dir(frame_url: str) -> Path:
+    parsed = urlparse(frame_url)
+    host_seg: str = _slug(parsed.hostname or "") or "unknown_page"
+    parts: list[str] = [_slug(p) for p in parsed.path.split("/") if _slug(p)]
+    return DATA_DIR.joinpath(host_seg, *parts)
+
+
+def _script_name(url: str) -> str:
+    parsed = urlparse(url)
+    name: str = Path(parsed.path).name if parsed.path else ""
+    name = _slug(name, max_len=60)
+    if name.endswith(".js"):
+        name = name[:-3]
+    return name or "inline"
+
+
+def _initiator_segment(initiator_url: str) -> str:
+    if not initiator_url:
+        return "unknown"
+    parsed = urlparse(initiator_url)
+    host: str = _slug(parsed.hostname or "") or "unknown"
+    name: str = _slug(Path(parsed.path).name) or "root"
+    return _slug(f"{host}_{name}", max_len=60)
+
+
+def _fit_name(parts: list[str], content_hash: str, limit: int = 200) -> str:
+    suffix: str = f"__{content_hash}.js"
+    for cut in range(len(parts)):
+        candidate: str = "__".join(parts[:1] + parts[1 + cut :]) + suffix
+        if len(candidate.encode()) <= limit:
+            return candidate
+    return f"script{suffix}"
+
+
+def _write_index(record: dict) -> None:
+    line: str = json.dumps(record, ensure_ascii=False) + "\n"
+    try:
+        with _index_lock:
+            with open(INDEX_FILE, "a", encoding="utf-8") as f:
+                f.write(line)
+    except Exception as e:
+        logger.warning("cdp: failed to write index (%s)", e)
 
 
 class Tab:
@@ -64,19 +123,22 @@ class Tab:
         ws_url: str,
         target_info: dict,
         timeout: float,
-        on_script: Callable[[str, str, str], None],
+        on_script: Callable[[str, str, str, dict], None],
     ):
         self.ws_url: str = ws_url
         self.target_id: str = target_info.get("id", ws_url)
         self.url: str = target_info.get("url", "")
         self.timeout: float = timeout
-        self._on_script: Callable[[str, str, str], None] = on_script
+        self._on_script: Callable[[str, str, str, dict], None] = on_script
         self._ws: websockets.sync.client.ClientConnection | None = None
         self._msg_id: int = 0
-        self._pending: dict[int, tuple[str, str]] = {}
+        self._pending: dict[int, tuple[str, str, dict]] = {}
         self._seen_script_ids: set[str] = set()
         self._ready: bool = False
         self._enable_msg_id: int | None = None
+        self._frame_tree_msg_id: int | None = None
+        self._contexts: dict[int, dict] = {}
+        self._frames: dict[str, dict] = {}
         self._connected: bool = False
         self._stop: bool = False
 
@@ -105,6 +167,11 @@ class Tab:
         except Exception as e:
             logger.warning("cdp: connect failed %s (%s)", self.url, e)
             return False
+        self._contexts.clear()
+        self._frames.clear()
+        self._send("Page.enable")
+        self._send("Runtime.enable")
+        self._frame_tree_msg_id = self._send("Page.getFrameTree")
         mid: int | None = self._send("Debugger.enable")
         if mid is None:
             self.close()
@@ -156,7 +223,23 @@ class Tab:
                 self._connected = False
             return
 
-        if method == "Debugger.scriptParsed" and self._ready:
+        if msg_id is not None and msg_id == self._frame_tree_msg_id:
+            self._frame_tree_msg_id = None
+            if "error" not in data:
+                self._ingest_frame_tree(data.get("result", {}).get("frameTree", {}))
+            return
+
+        if method == "Runtime.executionContextCreated":
+            self._handle_context_created(params)
+        elif method == "Runtime.executionContextDestroyed":
+            self._contexts.pop(params.get("executionContextId"), None)
+        elif method == "Runtime.executionContextsCleared":
+            self._contexts.clear()
+        elif method == "Page.frameNavigated":
+            self._handle_frame_navigated(params)
+        elif method == "Page.frameDetached":
+            self._frames.pop(params.get("frameId"), None)
+        elif method == "Debugger.scriptParsed" and self._ready:
             self._handle_script_parsed(params)
         elif method == "Debugger.paused":
             self._send("Debugger.resume")
@@ -174,18 +257,85 @@ class Tab:
         )
         if mid is None:
             return
-        script_url: str = params.get("url", self.url)
-        self._pending[mid] = (script_id, script_url)
+        script_url: str = params.get("url", "")
+        meta: dict = {
+            "execution_context_id": params.get("executionContextId"),
+            "execution_context_aux_data": params.get("executionContextAuxData") or {},
+            "stack_trace": params.get("stackTrace") or {},
+            "is_module": bool(params.get("isModule")),
+            "source_map_url": params.get("sourceMapURL", ""),
+            "hash": params.get("hash", ""),
+            "embedder_name": params.get("embedderName", ""),
+        }
+        ctx: dict = self._contexts.get(meta["execution_context_id"]) or {}
+        aux: dict = meta["execution_context_aux_data"] or ctx.get("auxData") or {}
+        meta["is_isolated_world"] = aux.get("isDefault") is False
+        self._pending[mid] = (script_id, script_url, meta)
 
     def _handle_pending_response(self, msg_id: int, data: dict) -> None:
-        sid, url = self._pending.pop(msg_id)
+        sid, url, meta = self._pending.pop(msg_id)
         if "error" in data:
             if url:
                 logger.warning("cdp: getScriptSource failed for %s", url)
             return
         source: str = data.get("result", {}).get("scriptSource", "")
         if source:
-            self._on_script(source, url, sid)
+            frame_id: str = self._frame_id_for(meta)
+            meta["frame_id"] = frame_id
+            meta["frame_url"] = self._resolve_frame_url(frame_id) or self.url
+            meta["initiator_url"] = self._resolve_initiator(
+                meta.get("stack_trace") or {}
+            )
+            self._on_script(source, url, sid, meta)
+
+    def _handle_context_created(self, params: dict) -> None:
+        context: dict = params.get("context") or {}
+        context_id = context.get("id")
+        if context_id is not None:
+            self._contexts[context_id] = context
+
+    def _handle_frame_navigated(self, params: dict) -> None:
+        frame: dict = params.get("frame") or {}
+        frame_id: str = frame.get("id", "")
+        if not frame_id:
+            return
+        self._frames[frame_id] = frame
+        if not frame.get("parentId") and frame.get("url"):
+            self.url = frame["url"]
+
+    def _ingest_frame_tree(self, node: dict) -> None:
+        if not node:
+            return
+        self._handle_frame_navigated({"frame": node.get("frame") or {}})
+        for child in node.get("childFrames", []) or []:
+            self._ingest_frame_tree(child)
+
+    def _frame_id_for(self, meta: dict) -> str:
+        frame_id: str = (meta.get("execution_context_aux_data") or {}).get(
+            "frameId", ""
+        )
+        if not frame_id:
+            context = self._contexts.get(meta.get("execution_context_id"))
+            if context:
+                frame_id = (context.get("auxData") or {}).get("frameId", "")
+        return frame_id
+
+    def _resolve_frame_url(self, frame_id: str) -> str:
+        if frame_id:
+            frame = self._frames.get(frame_id)
+            if frame and frame.get("url"):
+                return frame["url"]
+        return ""
+
+    def _resolve_initiator(self, stack: dict) -> str:
+        for frame in stack.get("callFrames", []) or []:
+            url = frame.get("url")
+            if url:
+                return url
+        parent = stack.get("parent")
+        if parent:
+            return self._resolve_initiator(parent)
+        return ""
 
     def close(self) -> None:
         self._connected = False
@@ -327,31 +477,64 @@ class CdpManager:
         thread.start()
 
     def _on_script_internal(
-        self, target_type: str, source: str, url: str, script_id: str
+        self, target_type: str, source: str, url: str, script_id: str, meta: dict
     ) -> None:
-        host: str = urlparse(url).hostname or "unknown"
-        if not host_in_scope(host):
+        if urlparse(url).scheme in _EXTENSION_SCHEMES:
             return
-        safe_host: str = host.replace(".", "_").replace(":", "_")
+        if meta.get("is_isolated_world"):
+            return
+        script_host: str = urlparse(url).hostname or ""
+        frame_url: str = meta.get("frame_url", "")
+        initiator_url: str = meta.get("initiator_url", "")
+        frame_host: str = urlparse(frame_url).hostname or ""
+        initiator_host: str = urlparse(initiator_url).hostname or ""
+
+        if not (
+            host_in_scope(script_host)
+            or host_in_scope(frame_host)
+            or host_in_scope(initiator_host)
+        ):
+            return
+
         content_hash: str = hashlib.sha256(source.encode()).hexdigest()[:16]
 
-        script_name: str = Path(urlparse(url).path).name or "inline"
-        script_name = re.sub(r"[^a-zA-Z0-9._-]", "_", script_name)[:60]
-        if script_name.endswith(".js"):
-            script_name = script_name[:-3]
-
-        filepath: Path = (
-            DATA_DIR / f"{safe_host}_{target_type}_{script_name}_{content_hash}.js"
+        page_dir: Path = _page_dir(frame_url)
+        script_name: str = _script_name(url)
+        script_host_seg: str = _slug(script_host) or "inline"
+        initiator_seg: str = _initiator_segment(initiator_url)
+        file_name: str = _fit_name(
+            [script_host_seg, f"from_{initiator_seg}", target_type, script_name],
+            content_hash,
         )
+        filepath: Path = page_dir / file_name
         if filepath.exists():
             return
         try:
+            page_dir.mkdir(parents=True, exist_ok=True)
             filepath.write_text(source, encoding="utf-8")
         except Exception as e:
             logger.warning("cdp: failed to save script %s (%s)", filepath, e)
             return
 
         self._script_count += 1
+        _write_index(
+            {
+                "file": str(filepath),
+                "script_url": url,
+                "frame_url": frame_url,
+                "initiator_url": initiator_url,
+                "stack": (meta.get("stack_trace") or {}).get("callFrames", []),
+                "execution_context_id": meta.get("execution_context_id"),
+                "frame_id": meta.get("frame_id", ""),
+                "target_type": target_type,
+                "is_module": meta.get("is_module", False),
+                "source_map_url": meta.get("source_map_url", ""),
+                "hash": meta.get("hash", ""),
+                "content_hash": content_hash,
+                "timestamp": time.time(),
+            }
+        )
+
         for cb in self._script_callbacks:
             _executor.submit(cb, source, url, script_id)
 
