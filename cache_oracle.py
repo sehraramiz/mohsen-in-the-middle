@@ -19,8 +19,8 @@ CDN_CACHE_HEADERS = {
 }
 
 _CACHE_VALUE_PAT = re.compile(
-    r"(hit|miss|stale|fresh|expired|bypass|dynamic|tcp_hit|tcp_miss|"
-    r"tcp_refresh_hit|tcp_ims_hit|tcp_denied|served_from|hit_from|miss_from)",
+    r"\b(hit|miss|tcp_hit|tcp_miss|tcp_mem_hit|tcp_refresh_hit|"
+    r"tcp_ims_hit|hit_from|miss_from|served_from)\b",
     re.IGNORECASE,
 )
 
@@ -59,9 +59,8 @@ class CacheOracle:
         cache_header_regex = ctx.options.cache_header_regex
 
         found_cdn = False
-        found_custom = cache_header_regex is None
+        found_custom = False
         found_hit = False
-        found_token = False
         found_age = False
         found_maxage = False
 
@@ -73,8 +72,10 @@ class CacheOracle:
                 log_parts.append(f"{key_lower}: {val_lower}")
                 found_cdn = True
 
-            if not found_custom and re.search(
-                cache_header_regex, f"{key_lower}: {val_lower}"
+            if (
+                not found_custom
+                and cache_header_regex
+                and re.search(cache_header_regex, f"{key_lower}: {val_lower}")
             ):
                 log_parts.append(f"{key_lower}: {val_lower}")
                 found_custom = True
@@ -86,10 +87,6 @@ class CacheOracle:
             ):
                 log_parts.append(f"{key_lower}: {val_lower}")
                 found_hit = True
-
-            if not found_token and _CACHE_VALUE_PAT.match(val_lower):
-                log_parts.append(f"{key_lower}: {val_lower}")
-                found_token = True
 
             if not found_age and key_lower == "age" and val_lower != "0":
                 log_parts.append(f"{key_lower}: {val_lower}")
@@ -104,17 +101,7 @@ class CacheOracle:
                 log_parts.append(f"{key_lower}: {val_lower}")
                 found_maxage = True
 
-            if (
-                found_cdn
-                and found_custom
-                and found_hit
-                and found_token
-                and found_age
-                and found_maxage
-            ):
-                break
-
-        if log_parts:
+        if log_parts and (found_hit or found_custom):
             self._log_buffer.append(
                 f"{flow.id}|{flow.response.status_code}|{flow.request.pretty_url}|{'|'.join(log_parts)}\n"
             )
