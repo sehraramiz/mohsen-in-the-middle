@@ -20,7 +20,7 @@ def response(flow: http.HTTPFlow):
     frozen_flow = ctx.master.view.get_by_id(frozen_flow_id)
     if frozen_flow:
         flow.response = frozen_flow.response.copy()
-        flow.marked = "F"
+        flow.marked = "f"
     else:
         _frozen_flows.pop(req_key, None)
         logging.log(ALERT, f"Frozen flow {req_key} was deleted, removing reference")
