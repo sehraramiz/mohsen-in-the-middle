@@ -51,7 +51,11 @@ def _get_highlight_key(flow) -> str | None:
     return None
 
 
-class FlowItemWithHighlight(flowlist.FlowItem):
+_ORIGINAL_FLOWITEM = getattr(flowlist, "_highlighter_original", flowlist.FlowItem)
+flowlist._highlighter_original = _ORIGINAL_FLOWITEM
+
+
+class FlowItemWithHighlight(_ORIGINAL_FLOWITEM):
     _DEFAULT_COLOR: str = "highlight_focus"
     _focus_map: dict | None = None
     _cache_palette: str | None = None
