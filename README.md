@@ -46,6 +46,11 @@ def request(flow: http.HTTPFlow):
 - [Flow Freezer](./freezer.py) to capture and freeze a flow’s response to serve the frozen response for any future requests to the same url.
 - [Rotator](./rotator.py) use Tor as upstream proxy and rotate IPs. See [Tor Setup](#tor-upstream-with-rotator) below.
 - [Cache Oracle](./cache_oracle.py) detect cached responses by inspecting response headers for CDN signals (CF-Cache-Status, X-Cache, Age, max-age, custom header regex, hit/miss value patterns)
+- [Full-Text Search](./fts.py) standalone ranked full-text search over captured flows using in-memory SQLite FTS5. Keeps two indexes — `unicode61` for words and `trigram` for substring/IDs — and tags matching flows so the view filters to them. Commands:
+  - `:fts <query>` — search, tag matches, filter the view, log a ranked summary
+  - `:fts.raw <query>` — same, with raw FTS5 syntax
+  - `:fts.clear` — clear tags and remove the fts view filter
+  - `:fts.status` — indexed flow count, index size, active query
 
 
 ## Tor upstream with Rotator
