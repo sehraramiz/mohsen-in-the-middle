@@ -51,6 +51,11 @@ def request(flow: http.HTTPFlow):
   - `:fts.raw <query>` — same, with raw FTS5 syntax
   - `:fts.clear` — clear tags and remove the fts view filter
   - `:fts.status` — indexed flow count, index size, active query
+- [Caller ID](./caller_id.py) attaches Chrome's request initiator (`Network.requestWillBeSent`) to proxied flows, so a request can be traced back to the JS file/line/call stack that fired it. Requires `cdp_manager.py` loaded first. Commands:
+  - `:caller` — show who fired the focused flow and filter the view to flows from the same script
+  - `:caller.stack` — print the full recorded call stack
+  - `:caller.clear` — clear `caller` tags and remove the `caller` view filter
+  - `:caller.status` — CDP capture status, tracked records, tagged flows
 
 
 ## Tor upstream with Rotator
