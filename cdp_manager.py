@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import functools
 import hashlib
 import json
@@ -60,6 +62,24 @@ _EXTENSION_SCHEMES: frozenset[str] = frozenset(
 )
 
 _executor = ThreadPoolExecutor(max_workers=4)
+
+
+def _submit(callback: Callable[..., None], *args) -> None:
+    """Run a consumer callback on the pool and log anything it raises.
+
+    Exceptions inside a submitted callable normally vanish with the Future;
+    without this wrapper a broken consumer looks like "no events arrived".
+    """
+
+    future = _executor.submit(callback, *args)
+
+    def _log_failure(done) -> None:
+        exc = done.exception()
+        if exc is not None:
+            logger.warning("cdp: callback %r failed (%s)", callback, exc)
+
+    future.add_done_callback(_log_failure)
+
 
 _index_lock = threading.Lock()
 INDEX_FILE: Path = DATA_DIR / "index.jsonl"
@@ -124,12 +144,18 @@ class Tab:
         target_info: dict,
         timeout: float,
         on_script: Callable[[str, str, str, dict], None],
+        on_request: Callable[[dict], None],
+        on_ready: Callable[[Tab], None] | None = None,
+        on_binding: Callable[[dict], None] | None = None,
     ):
         self.ws_url: str = ws_url
         self.target_id: str = target_info.get("id", ws_url)
         self.url: str = target_info.get("url", "")
         self.timeout: float = timeout
         self._on_script: Callable[[str, str, str, dict], None] = on_script
+        self._on_request: Callable[[dict], None] = on_request
+        self._on_ready: Callable[[Tab], None] | None = on_ready
+        self._on_binding: Callable[[dict], None] | None = on_binding
         self._ws: websockets.sync.client.ClientConnection | None = None
         self._msg_id: int = 0
         self._pending: dict[int, tuple[str, str, dict]] = {}
@@ -141,19 +167,32 @@ class Tab:
         self._frames: dict[str, dict] = {}
         self._connected: bool = False
         self._stop: bool = False
+        self._send_lock: threading.Lock = threading.Lock()
 
     def _send(self, method: str, params: dict | None = None) -> int | None:
-        if not self._ws:
-            return None
-        self._msg_id += 1
-        msg: dict = {"id": self._msg_id, "method": method}
-        if params:
-            msg["params"] = params
-        try:
-            self._ws.send(json.dumps(msg))
-        except Exception:
-            return None
-        return self._msg_id
+        with self._send_lock:
+            if not self._ws:
+                return None
+            self._msg_id += 1
+            msg: dict = {"id": self._msg_id, "method": method}
+            if params:
+                msg["params"] = params
+            try:
+                self._ws.send(json.dumps(msg))
+            except Exception as e:
+                if not self._stop:
+                    logger.warning(
+                        "cdp: send %s failed on %s (%s)", method, self.url, e
+                    )
+                return None
+            return self._msg_id
+
+    def send(self, method: str, params: dict | None = None) -> int | None:
+        """Send a raw CDP command on this tab's session.
+
+        Safe to call from other threads (e.g. an addon exposing a command).
+        """
+        return self._send(method, params)
 
     def connect(self, timeout: float | None = None) -> bool:
         try:
@@ -171,6 +210,7 @@ class Tab:
         self._frames.clear()
         self._send("Page.enable")
         self._send("Runtime.enable")
+        self._send("Network.enable")
         self._frame_tree_msg_id = self._send("Page.getFrameTree")
         mid: int | None = self._send("Debugger.enable")
         if mid is None:
@@ -179,6 +219,11 @@ class Tab:
         self._enable_msg_id = mid
         self._connected = True
         logger.info("cdp: connected to %s", self.url)
+        if self._on_ready is not None:
+            try:
+                self._on_ready(self)
+            except Exception as e:
+                logger.warning("cdp: on-ready callback failed (%s)", e)
         return True
 
     def run(self) -> None:
@@ -241,6 +286,10 @@ class Tab:
             self._frames.pop(params.get("frameId"), None)
         elif method == "Debugger.scriptParsed" and self._ready:
             self._handle_script_parsed(params)
+        elif method == "Network.requestWillBeSent":
+            self._handle_request_will_be_sent(params)
+        elif method == "Runtime.bindingCalled":
+            self._handle_binding_called(params)
         elif method == "Debugger.paused":
             self._send("Debugger.resume")
 
@@ -271,6 +320,51 @@ class Tab:
         aux: dict = meta["execution_context_aux_data"] or ctx.get("auxData") or {}
         meta["is_isolated_world"] = aux.get("isDefault") is False
         self._pending[mid] = (script_id, script_url, meta)
+
+    def _handle_request_will_be_sent(self, params: dict) -> None:
+        request: dict = params.get("request") or {}
+        url: str = request.get("url", "")
+        if not url:
+            return
+        initiator: dict = params.get("initiator") or {}
+        stack: dict = initiator.get("stack") or {}
+        record: dict = {
+            "request_id": params.get("requestId", ""),
+            "method": request.get("method", ""),
+            "url": url,
+            "type": params.get("type", ""),
+            "frame_id": params.get("frameId", ""),
+            "document_url": params.get("documentURL", ""),
+            "wall_time": params.get("wallTime") or time.time(),
+            "initiator_type": initiator.get("type", ""),
+            "initiator_url": initiator.get("url", ""),
+            "initiator_line": initiator.get("lineNumber"),
+            "initiator_column": initiator.get("columnNumber"),
+            "stack": stack.get("callFrames", []) or [],
+        }
+        try:
+            self._on_request(record)
+        except Exception as e:
+            logger.warning("cdp: request callback failed (%s)", e)
+
+    def _handle_binding_called(self, params: dict) -> None:
+        callback = self._on_binding
+        if callback is None:
+            return
+        context: dict = self._contexts.get(params.get("executionContextId")) or {}
+        aux: dict = context.get("auxData") or {}
+        frame_id: str = aux.get("frameId", "")
+        info: dict = {
+            "name": params.get("name", ""),
+            "payload": params.get("payload", ""),
+            "url": self._resolve_frame_url(frame_id) or self.url,
+            "frame_id": frame_id,
+            "context_id": params.get("executionContextId"),
+        }
+        try:
+            callback(info)
+        except Exception as e:
+            logger.warning("cdp: binding callback failed (%s)", e)
 
     def _handle_pending_response(self, msg_id: int, data: dict) -> None:
         sid, url, meta = self._pending.pop(msg_id)
@@ -363,6 +457,10 @@ class CdpManager:
     def __init__(self):
         self._tabs: dict[str, tuple[Tab, threading.Thread]] = {}
         self._script_callbacks: list[Callable[[str, str, str], None]] = []
+        self._request_callbacks: list[Callable[[dict], None]] = []
+        self._tab_callbacks: list[Callable[[Tab], None]] = []
+        self._binding_callbacks: list[Callable[[dict], None]] = []
+        self._seen_requests: set[tuple[str, str]] = set()
         self._script_count: int = 0
         self._enabled: bool = False
         self._user_disabled: bool = False
@@ -374,6 +472,37 @@ class CdpManager:
     def on_script(self, callback: Callable[[str, str, str], None]) -> None:
         self._script_callbacks.append(callback)
 
+    def on_request(self, callback: Callable[[dict], None]) -> None:
+        """Register a callback for scoped ``Network.requestWillBeSent`` events.
+
+        The record is read-only and contains: ``request_id``, ``method``,
+        ``url``, ``type``, ``frame_id``, ``document_url``, ``wall_time``
+        (epoch seconds), ``initiator_type``, ``initiator_url``,
+        ``initiator_line``, ``initiator_column``, ``stack`` (``callFrames``)
+        and ``target_type``.
+        """
+        self._request_callbacks.append(callback)
+
+    def on_tab_ready(self, callback: Callable[[Tab], None]) -> None:
+        """Register a callback run with each Tab right after it connects.
+
+        Runs on the tab's own thread, so the callback may safely ``tab.send()``.
+        Fires on every (re)connect, before ``Debugger`` is confirmed enabled.
+
+        Note: connect happens after the page already exists, so
+        ``Page.addScriptToEvaluateOnNewDocument`` only covers *future*
+        navigations unless you also pass ``runImmediately: True``.
+        """
+        self._tab_callbacks.append(callback)
+
+    def on_binding(self, callback: Callable[[dict], None]) -> None:
+        """Register a callback for every CDP Runtime.bindingCalled event.
+
+        The page calls a binding created with Runtime.addBinding; each call
+        arrives here as an ``info`` dict (name, payload, url, frame_id).
+        """
+        self._binding_callbacks.append(callback)
+
     def running(self) -> None:
         if not self._user_disabled:
             self._start()
@@ -383,6 +512,7 @@ class CdpManager:
         for tab, _ in self._tabs.values():
             tab.shutdown()
         self._tabs.clear()
+        self._seen_requests.clear()
         self._enabled = False
 
     def _start(self) -> None:
@@ -471,10 +601,32 @@ class CdpManager:
 
     def _connect_tab(self, ws_url: str, target_info: dict, target_type: str) -> None:
         on_script = functools.partial(self._on_script_internal, target_type)
-        tab: Tab = Tab(ws_url, target_info, CDP_TIMEOUT, on_script)
+        on_request = functools.partial(
+            self._on_request_internal, target_type, target_info["id"]
+        )
+        tab: Tab = Tab(
+            ws_url,
+            target_info,
+            CDP_TIMEOUT,
+            on_script,
+            on_request,
+            on_ready=self._on_tab_ready_internal,
+            on_binding=self._on_binding_internal,
+        )
         thread: threading.Thread = threading.Thread(target=tab.run, daemon=True)
         self._tabs[target_info["id"]] = (tab, thread)
         thread.start()
+
+    def _on_tab_ready_internal(self, tab: Tab) -> None:
+        for cb in self._tab_callbacks:
+            try:
+                cb(tab)
+            except Exception as e:
+                logger.warning("cdp: tab-ready callback failed (%s)", e)
+
+    def _on_binding_internal(self, info: dict) -> None:
+        for cb in self._binding_callbacks:
+            _submit(cb, info)
 
     def _on_script_internal(
         self, target_type: str, source: str, url: str, script_id: str, meta: dict
@@ -536,7 +688,33 @@ class CdpManager:
         )
 
         for cb in self._script_callbacks:
-            _executor.submit(cb, source, url, script_id)
+            _submit(cb, source, url, script_id)
+
+    def _on_request_internal(
+        self, target_type: str, target_id: str, record: dict
+    ) -> None:
+        url: str = record.get("url", "")
+        document_url: str = record.get("document_url", "")
+        host: str = urlparse(url).hostname or ""
+        document_host: str = urlparse(document_url).hostname or ""
+
+        if not (host_in_scope(host) or host_in_scope(document_host)):
+            return
+
+        key: tuple[str, str, str] = (
+            target_id,
+            record.get("request_id", ""),
+            url,
+        )
+        if key in self._seen_requests:
+            return
+        self._seen_requests.add(key)
+        if len(self._seen_requests) > 20000:
+            self._seen_requests.clear()
+
+        record["target_type"] = target_type
+        for cb in self._request_callbacks:
+            _submit(cb, record)
 
     @command.command("cdp")
     def cdp_command(self, action: str = "") -> None:
