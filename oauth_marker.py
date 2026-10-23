@@ -1,5 +1,6 @@
 import html
 import json
+import logging
 import re
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote_plus, urlparse
@@ -10,6 +11,8 @@ from mitmproxy.log import ALERT
 WINDOW = 50
 MIN_TRACK_LEN = 8
 MAX_FORM_BODY = 500_000
+
+OAUTH_BLOCK = '((~meta "oauth_marked: [Tt]rue"))'
 
 RELEVANT_PARAMS: set[str] = {
     "response_type",
@@ -102,6 +105,27 @@ def _classify(params: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
     return relevant, tracked
 
 
+def _walk_json(obj, out: dict[str, str] | None = None) -> dict[str, str]:
+    """Flatten a JSON structure to leaf-name -> string value.
+
+    Token responses nest the interesting values (`{"data": {"access_token": …}}`), so a
+    top-level comprehension misses them. Leaf names are used as-is; dotted paths are not
+    reconstructed (they are only needed once the names travel on journey links).
+    """
+    if out is None:
+        out = {}
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(value, str):
+                out[str(key)] = value
+            else:
+                _walk_json(value, out)
+    elif isinstance(obj, list):
+        for value in obj:
+            _walk_json(value, out)
+    return out
+
+
 def _extract_query(flow: http.HTTPFlow) -> dict[str, str]:
     return dict(flow.request.query)
 
@@ -123,9 +147,7 @@ def _extract_post(flow: http.HTTPFlow) -> dict[str, str]:
             raw = json.loads(text)
         except Exception:
             return {}
-        if isinstance(raw, dict):
-            return {str(k): str(v) for k, v in raw.items() if isinstance(v, str)}
-        return {}
+        return _walk_json(raw)
 
     if "urlencoded" in ct:
         body: dict[str, str] = {}
@@ -177,9 +199,7 @@ def _extract_json_body(flow: http.HTTPFlow) -> dict[str, str]:
         body = json.loads(resp.get_text())
     except Exception:
         return {}
-    if not isinstance(body, dict):
-        return {}
-    return {str(k): str(v) for k, v in body.items() if isinstance(v, str)}
+    return _walk_json(body)
 
 
 def _extract_form_post(flow: http.HTTPFlow) -> dict[str, str]:
@@ -241,10 +261,7 @@ def _collect_request_values(flow: http.HTTPFlow) -> set[str]:
             raw = json.loads(text)
         except Exception:
             raw = None
-        if isinstance(raw, dict):
-            for v in raw.values():
-                if isinstance(v, str):
-                    values.add(v)
+        values.update(_walk_json(raw).values())
 
     for name, value in flow.request.headers.items():
         if name.lower() == "authorization":
@@ -289,10 +306,7 @@ def _collect_response_values(flow: http.HTTPFlow) -> set[str]:
             body = json.loads(resp.get_text())
         except Exception:
             body = None
-        if isinstance(body, dict):
-            for v in body.values():
-                if isinstance(v, str):
-                    values.add(v)
+        values.update(_walk_json(body).values())
 
     for name, value in resp.headers.items():
         if name.lower() == "authorization":
@@ -368,7 +382,7 @@ class OAuthMarker:
         registered_matches = self._match_known(candidates)
         relevant, tracked = _classify(extracted)
 
-        if not relevant and not registered_matches and len(tracked) < 2:
+        if not relevant and not registered_matches and not tracked:
             return
 
         for name, value in tracked.items():
@@ -391,22 +405,33 @@ class OAuthMarker:
             return
 
         flow.metadata["highlight_color"] = "pink"
+        flow.metadata["oauth_highlight"] = "pink"
         flow.metadata["oauth_marked"] = True
         flow.metadata["oauth_params"] = sorted(params)
         self._count += 1
         url = f"{flow.request.host}{flow.request.path}"
-        ctx.log(f"[oauth-marker] {url} — {', '.join(sorted(params))}")
+        logging.log(ALERT, f"[oauth-marker] {url} — {', '.join(sorted(params))}")
+
+    def _set_filter(self, on: bool) -> None:
+        try:
+            current = (
+                (ctx.options.view_filter or "").replace(OAUTH_BLOCK, "").strip(" &")
+            )
+        except AttributeError:
+            return
+
+        if on:
+            if current and current != "~all":
+                ctx.options.view_filter = f"{OAUTH_BLOCK} & {current}"
+            else:
+                ctx.options.view_filter = OAUTH_BLOCK
+        else:
+            ctx.options.view_filter = current or "~all"
 
     @command.command("oauth")
     def filter_oauth(self) -> None:
-        current = ctx.options.view_filter or ""
-        if "oauth_marked" in current:
-            ctx.log("OAuth filter already active", ALERT)
-            return
-        marker = '~meta "oauth_marked: [Tt]rue"'
-        new_filter = f"{current} & {marker}" if current.strip() else marker
-        ctx.master.commands.call_strings("set", ["view_filter", new_filter])
-        ctx.log(f"Showing {self._count} OAuth-marked flows", ALERT)
+        self._set_filter(True)
+        logging.log(ALERT, f"Showing {self._count} OAuth-marked flows")
 
     @command.command("oauth.clear")
     def clear_marks(self) -> None:
@@ -414,11 +439,23 @@ class OAuthMarker:
         for flow in ctx.master.view:
             if flow.metadata.pop("oauth_marked", False):
                 flow.metadata.pop("oauth_params", None)
-                flow.metadata.pop("highlight_color", None)
+                ours = flow.metadata.pop("oauth_highlight", None)
+                if ours is not None and flow.metadata.get("highlight_color") == ours:
+                    flow.metadata.pop("highlight_color", None)
                 cleared += 1
         self._count = 0
         self._known_values.clear()
-        ctx.log(f"Cleared OAuth marks on {cleared} flows", ALERT)
+        self._set_filter(False)
+        logging.log(ALERT, f"Cleared OAuth marks on {cleared} flows")
+
+    @command.command("oauth.status")
+    def status(self) -> None:
+        active = OAUTH_BLOCK in (ctx.options.view_filter or "")
+        logging.log(
+            ALERT,
+            f"oauth: {self._count} marked, {len(self._known_values)} tracked value(s), "
+            f"window {WINDOW}, filter {'on' if active else 'off'}",
+        )
 
 
 addons = [OAuthMarker()]
