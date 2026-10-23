@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import websockets.sync.client
 
 from mitmproxy import command
-from cdp_registry import register
+from cdp_registry import get as get_registered, register
 from config import host_in_scope, settings
 
 logger = logging.getLogger(__name__)
@@ -450,6 +450,10 @@ class CdpManager:
 
     @classmethod
     def instance(cls):
+        existing = get_registered()
+        if existing is not None:
+            cls._instance = existing
+            return existing
         if cls._instance is None:
             cls._instance = cls()
         return cls._instance
@@ -467,7 +471,7 @@ class CdpManager:
         self._launched_chrome: bool = False
         self._chrome_up: bool = False
         self._stop: bool = False
-        register(self)
+        self._primary: bool = register(self) is self
 
     def on_script(self, callback: Callable[[str, str, str], None]) -> None:
         self._script_callbacks.append(callback)
@@ -504,10 +508,15 @@ class CdpManager:
         self._binding_callbacks.append(callback)
 
     def running(self) -> None:
+        if not self._primary:
+            logger.warning("cdp: duplicate manager instance ignored")
+            return
         if not self._user_disabled:
             self._start()
 
     def done(self) -> None:
+        if not self._primary:
+            return
         self._stop = True
         for tab, _ in self._tabs.values():
             tab.shutdown()
@@ -718,6 +727,9 @@ class CdpManager:
 
     @command.command("cdp")
     def cdp_command(self, action: str = "") -> None:
+        if not self._primary:
+            logger.warning("cdp: duplicate manager instance ignored")
+            return
         if action == "off":
             self._user_disabled = True
             self.done()
