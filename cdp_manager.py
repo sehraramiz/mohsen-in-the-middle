@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -38,6 +39,8 @@ CDP_USER_DATA_DIR: str = getattr(
 
 DATA_DIR: Path = Path(f"./{settings.project_name}_data/cdp_scripts")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+BLOBS_DIR: Path = DATA_DIR / "_blobs"
+BLOBS_DIR.mkdir(parents=True, exist_ok=True)
 
 _CHROME_CANDIDATES: list[str] = [
     "google-chrome",
@@ -127,6 +130,72 @@ def _fit_name(parts: list[str], content_hash: str, limit: int = 200) -> str:
     return f"script{suffix}"
 
 
+def _digest(source: str) -> str:
+    return hashlib.sha256(source.encode()).hexdigest()
+
+
+def _store_blob(source: str, digest: str) -> Path | None:
+    """Write *source* to the content-addressed blob store, once.
+
+    The write is atomic and idempotent: tab threads racing on the same
+    library both produce identical bytes, so whichever ``os.replace`` lands
+    last simply wins.
+    """
+    blob: Path = BLOBS_DIR / f"{digest}.js"
+    if blob.exists():
+        return blob
+    tmp: str | None = None
+    try:
+        BLOBS_DIR.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            dir=BLOBS_DIR, prefix=f".{digest[:12]}.", suffix=".tmp"
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(source)
+        os.replace(tmp, blob)
+        return blob
+    except Exception as e:
+        logger.warning("cdp: failed to write blob %s (%s)", blob, e)
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        return None
+
+
+def _link_blob(blob: Path, dest: Path) -> bool:
+    """Point *dest* at the *blob* inode, falling back to a plain copy.
+
+    Page directories keep one path per page/frame that loaded the script, so
+    the tree stays browsable; the bytes live in ``_blobs/`` only once.
+    """
+    if dest.exists():
+        return False
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.link(blob, dest)
+        return True
+    except FileExistsError:
+        return False
+    except OSError as e:
+        logger.info("cdp: hardlink unavailable for %s (%s), writing a copy", dest, e)
+        try:
+            shutil.copyfile(blob, dest)
+            return True
+        except Exception as copy_error:
+            logger.warning("cdp: failed to save script %s (%s)", dest, copy_error)
+            return False
+
+
+def _file_digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _write_index(record: dict) -> None:
     line: str = json.dumps(record, ensure_ascii=False) + "\n"
     try:
@@ -208,6 +277,10 @@ class Tab:
             return False
         self._contexts.clear()
         self._frames.clear()
+        # scriptIds are scoped to a DevTools session; a reconnect gets a fresh
+        # id space, so anything remembered from the previous one would hide
+        # scripts (and their edits) from the new session.
+        self._seen_script_ids.clear()
         self._send("Page.enable")
         self._send("Runtime.enable")
         self._send("Network.enable")
@@ -657,7 +730,8 @@ class CdpManager:
         ):
             return
 
-        content_hash: str = hashlib.sha256(source.encode()).hexdigest()[:16]
+        content_digest: str = _digest(source)
+        content_hash: str = content_digest[:16]
 
         page_dir: Path = _page_dir(frame_url)
         script_name: str = _script_name(url)
@@ -670,17 +744,17 @@ class CdpManager:
         filepath: Path = page_dir / file_name
         if filepath.exists():
             return
-        try:
-            page_dir.mkdir(parents=True, exist_ok=True)
-            filepath.write_text(source, encoding="utf-8")
-        except Exception as e:
-            logger.warning("cdp: failed to save script %s (%s)", filepath, e)
+        blob: Path | None = _store_blob(source, content_digest)
+        if blob is None:
+            return
+        if not _link_blob(blob, filepath):
             return
 
         self._script_count += 1
         _write_index(
             {
                 "file": str(filepath),
+                "blob": str(blob),
                 "script_url": url,
                 "frame_url": frame_url,
                 "initiator_url": initiator_url,
@@ -766,6 +840,92 @@ class CdpManager:
                 )
         else:
             logger.warning("usage: :cdp on|off|status|launch")
+
+    @command.command("cdp.dedupe")
+    def cdp_dedupe(self) -> None:
+        """Re-link saved scripts that share content to one blob.
+
+        New saves already hardlink into ``_blobs/``; this repairs trees
+        captured before that and re-links trees that were copied around.
+        Idempotent.
+        """
+        if not self._primary:
+            logger.warning("cdp: duplicate manager instance ignored")
+            return
+        groups: dict[str, list[Path]] = {}
+        for path in DATA_DIR.rglob("*.js"):
+            if BLOBS_DIR in path.parents:
+                continue
+            try:
+                groups.setdefault(_file_digest(path), []).append(path)
+            except OSError as e:
+                logger.warning("cdp: cannot read %s (%s)", path, e)
+
+        relinked: int = 0
+        failed: int = 0
+        for digest, paths in groups.items():
+            blob: Path = BLOBS_DIR / f"{digest}.js"
+            if not blob.exists():
+                try:
+                    BLOBS_DIR.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(paths[0], blob)
+                except OSError as e:
+                    logger.warning("cdp: cannot create blob %s (%s)", blob, e)
+                    failed += len(paths)
+                    continue
+            for path in paths:
+                try:
+                    st = path.stat()
+                    blob_st = blob.stat()
+                    if (st.st_dev, st.st_ino) == (blob_st.st_dev, blob_st.st_ino):
+                        continue
+                except OSError:
+                    pass
+                tmp: Path = path.with_name(f".{path.name}.dedupe")
+                try:
+                    tmp.unlink(missing_ok=True)
+                    os.link(blob, tmp)
+                    os.replace(tmp, path)
+                    relinked += 1
+                except OSError as e:
+                    failed += 1
+                    logger.warning("cdp: cannot relink %s (%s)", path, e)
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+        logger.warning(
+            "cdp: dedupe done (%d files, %d relinked, %d failed)",
+            sum(len(paths) for paths in groups.values()),
+            relinked,
+            failed,
+        )
+
+    @command.command("cdp.gc")
+    def cdp_gc(self) -> None:
+        """Remove blobs whose page links are all gone."""
+        if not self._primary:
+            logger.warning("cdp: duplicate manager instance ignored")
+            return
+        removed: int = 0
+        freed: int = 0
+        for blob in BLOBS_DIR.glob("*.js"):
+            try:
+                st = blob.stat()
+                # Give in-flight saves a grace period: the blob is written
+                # just before its first link is made.
+                if st.st_nlink > 1 or time.time() - st.st_mtime < 300:
+                    continue
+                blob.unlink()
+                removed += 1
+                freed += st.st_size
+            except OSError as e:
+                logger.warning("cdp: cannot remove blob %s (%s)", blob, e)
+        logger.warning(
+            "cdp: gc done (%d orphan blobs removed, %.1f KiB freed)",
+            removed,
+            freed / 1024,
+        )
 
 
 addons: list[CdpManager] = [CdpManager.instance()]
