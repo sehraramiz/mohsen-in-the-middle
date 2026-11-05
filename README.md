@@ -56,6 +56,22 @@ def request(flow: http.HTTPFlow):
   - `:caller.stack` — print the full recorded call stack
   - `:caller.clear` — clear `caller` tags and remove the `caller` view filter
   - `:caller.status` — CDP capture status, tracked records, tagged flows
+- [CDP Manager](./cdp_manager.py) connects to Chrome over the DevTools protocol and captures every page, iframe and service-worker script before it runs, deduplicated into content-addressed blobs under `{project_name}_data/cdp_scripts/`. Feeds `caller_id.py`, so load it first. Commands:
+  - `:cdp.on` — enable script capture
+  - `:cdp.off` — disable script capture
+  - `:cdp.status` — connection and capture status
+  - `:cdp.launch` — launch Chrome on `:9222` with the configured profile
+  - `:cdp.dedupe` — re-link scripts sharing content to one blob
+  - `:cdp.gc` — delete orphan blobs
+- [Chains](./chains.py) records a window of flows and derives how they link — values handed from one response into a later request (JSON scalars, `Set-Cookie`, `Location` query/fragment params) plus 3xx redirects. Commands:
+  - `:chains.start` / `:chains.end` — begin/stop recording and derive links
+  - `:chains` — show the chain from the focused flow, or all linked groups
+  - `:chains.draw` — render an interactive HTML graph to `{project_name}_data/chains/`
+  - `:chains.clear` / `:chains.wipe` — remove the view filter / wipe the window
+- [OAuth Marker](./oauth_marker.py) detects OAuth2/OIDC parameters and tracks seed values (`code`, `state`, `nonce`, tokens) across a 50-request window, marking and highlighting the flows involved. Commands:
+  - `:oauth` — filter the view to OAuth-marked flows
+  - `:oauth.clear` — clear marks and the OAuth view filter
+  - `:oauth.status` — marked flow count, tracked values, window, filter state
 
 
 ## Tor upstream with Rotator
