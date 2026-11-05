@@ -219,7 +219,6 @@ def _value_links(
                 if value in haystacks[later]
                 or any(f and f in stacks[later] for f, stacks in extra)
             ]
-            # No consumer means the value was never used; too many means ambient.
             if not consumers or len(consumers) > MAX_CONSUMERS:
                 continue
             for later in consumers:
@@ -1620,7 +1619,6 @@ class Chains:
         )
 
     def draw2(self) -> None:
-        """Write the captured chains as a Mermaid sequence diagram."""
         if not self.flows:
             logging.log(
                 ALERT,
@@ -1679,12 +1677,10 @@ class Chains:
         )
 
     def clear(self) -> None:
-        """Remove the chains view filter but keep the capture and its tags."""
         self._set_filter(False)
         logging.log(ALERT, "chains: filter removed (capture kept)")
 
     def wipe(self) -> None:
-        """Throw the capture away: tags, flows, links, registry and filter."""
         for flow in self.flows:
             flow.metadata.pop("chains", None)
         self.flows = []

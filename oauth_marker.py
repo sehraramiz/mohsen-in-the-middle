@@ -109,8 +109,7 @@ def _walk_json(obj, out: dict[str, str] | None = None) -> dict[str, str]:
     """Flatten a JSON structure to leaf-name -> string value.
 
     Token responses nest the interesting values (`{"data": {"access_token": …}}`), so a
-    top-level comprehension misses them. Leaf names are used as-is; dotted paths are not
-    reconstructed (they are only needed once the names travel on journey links).
+    top-level comprehension misses them. Leaf names are used as-is.
     """
     if out is None:
         out = {}
