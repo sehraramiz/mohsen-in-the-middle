@@ -66,7 +66,7 @@ def request(flow: http.HTTPFlow):
 - [Chains](./chains.py) records a window of flows and derives how they link — values handed from one response into a later request (JSON scalars, `Set-Cookie`, `Location` query/fragment params) plus 3xx redirects. Commands:
   - `:chains.start` / `:chains.end` — begin/stop recording and derive links
   - `:chains` — show the chain from the focused flow, or all linked groups
-  - `:chains.draw` — render an interactive HTML graph to `{project_name}_data/chains/`
+  - `:chains.draw` — render an interactive HTML graph to `{dir_name}_data/chains/`
   - `:chains.clear` / `:chains.wipe` — remove the view filter / wipe the window
 - [OAuth Marker](./oauth_marker.py) detects OAuth2/OIDC parameters and tracks seed values (`code`, `state`, `nonce`, tokens) across a 50-request window, marking and highlighting the flows involved. Commands:
   - `:oauth` — filter the view to OAuth-marked flows

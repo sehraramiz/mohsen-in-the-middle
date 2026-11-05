@@ -1216,21 +1216,6 @@ def _cytoscape_source() -> str:
     return (base / "vendor" / "cytoscape.min.js").read_text(encoding="utf-8")
 
 
-def _project_name() -> str:
-    """The `.env` project name, so the output dir matches the rest of the suite."""
-    env = Path(".env")
-    if env.exists():
-        for line in env.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("project_name="):
-                value = line.partition("=")[2].strip()
-                try:
-                    return json.loads(value)
-                except json.JSONDecodeError:
-                    return value
-    return Path.cwd().name
-
-
 class Chains:
     def __init__(self) -> None:
         self.active = False
@@ -1316,7 +1301,7 @@ class Chains:
             "__CYTOSCAPE__", cytoscape.replace("</script", "<\\/script")
         ).replace("__PAYLOAD__", json.dumps(payload).replace("</", "<\\/"))
 
-        out_dir = Path(f"./{_project_name()}_data/chains")
+        out_dir = Path(f"./{Path.cwd().name}_data/chains")
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"chains-{datetime.now().strftime('%Y%m%d-%H%M%S')}.html"
         path.write_text(html, encoding="utf-8")
