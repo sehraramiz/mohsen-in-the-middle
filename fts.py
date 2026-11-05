@@ -11,6 +11,31 @@ FTS_BLOCK = '((~meta "fts: 1"))'
 RESULT_LIMIT = 2000
 SUMMARY_LIMIT = 15
 
+
+def _filter_add(block: str) -> None:
+    """AND `block` into the current view filter, preserving the existing expression."""
+    try:
+        current = ctx.options.view_filter or ""
+    except AttributeError:
+        return
+    current = current.replace(block, "").strip(" &")
+    if current and current != "~all":
+        ctx.options.view_filter = f"{block} & {current}"
+    else:
+        ctx.options.view_filter = block
+
+
+def _filter_remove(block: str | None) -> None:
+    """Drop `block`, restoring `~all` when nothing else remains."""
+    try:
+        current = ctx.options.view_filter or ""
+    except AttributeError:
+        return
+    if block:
+        current = current.replace(block, "").strip(" &")
+    ctx.options.view_filter = current or "~all"
+
+
 _scope_fn = None
 
 
@@ -177,18 +202,10 @@ class FTS:
         return False
 
     def _set_filter(self, on: bool) -> None:
-        try:
-            current = (ctx.options.view_filter or "").replace(FTS_BLOCK, "").strip(" &")
-        except AttributeError:
-            return
-
         if on:
-            if current and current != "~all":
-                ctx.options.view_filter = f"{FTS_BLOCK} & {current}"
-            else:
-                ctx.options.view_filter = FTS_BLOCK
+            _filter_add(FTS_BLOCK)
         else:
-            ctx.options.view_filter = current or "~all"
+            _filter_remove(FTS_BLOCK)
 
     def search(self, query: str, raw: bool = False) -> None:
         self._apply_options()

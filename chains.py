@@ -26,8 +26,6 @@ from urllib.parse import parse_qs, unquote, unquote_plus, urlparse
 from mitmproxy import command, ctx, http
 from mitmproxy.log import ALERT
 
-import chains_registry
-
 # Values shorter than this are too generic to be a useful link (an upload id is
 # often short, so this is deliberately lower than raavi's 16).
 MIN_VALUE_LEN = 8
@@ -43,6 +41,48 @@ BODY_SCAN_LIMIT = 1_000_000
 CHAINS_BLOCK = '((~meta "chains: 1"))'
 
 HOSTNAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*\.[a-z]{2,24}$")
+
+
+def _filter_add(block: str) -> None:
+    """AND `block` into the current view filter, preserving the existing expression."""
+    try:
+        current = ctx.options.view_filter or ""
+    except AttributeError:
+        return
+    current = current.replace(block, "").strip(" &")
+    if current and current != "~all":
+        ctx.options.view_filter = f"{block} & {current}"
+    else:
+        ctx.options.view_filter = block
+
+
+def _filter_remove(block: str | None) -> None:
+    """Drop `block`, restoring `~all` when nothing else remains."""
+    try:
+        current = ctx.options.view_filter or ""
+    except AttributeError:
+        return
+    if block:
+        current = current.replace(block, "").strip(" &")
+    ctx.options.view_filter = current or "~all"
+
+
+def _location_params(location: str) -> list[tuple[str, str]]:
+    """Every (name, value) pair carried by a Location header, query and fragment."""
+    fragment = ""
+    if "#" in location:
+        location, fragment = location.split("#", 1)
+
+    found = [
+        (name, value)
+        for name, values in parse_qs(urlparse(location).query).items()
+        for value in values
+    ]
+    for pair in fragment.split("&"):
+        if "=" in pair:
+            name, value = pair.split("=", 1)
+            found.append((unquote_plus(name), unquote_plus(value)))
+    return found
 
 
 @dataclass
@@ -103,22 +143,9 @@ def _location_values(flow: http.HTTPFlow) -> list[tuple[str, str]]:
     if not location:
         return []
 
-    fragment = ""
-    if "#" in location:
-        location, fragment = location.split("#", 1)
-
-    found: list[tuple[str, str]] = []
-    for values in parse_qs(urlparse(location).query).values():
-        found.extend((value, "location") for value in values)
-    if fragment:
-        for pair in fragment.split("&"):
-            if "=" in pair:
-                _, value = pair.split("=", 1)
-                found.append((unquote_plus(value), "location"))
-
     return [
-        (value, origin)
-        for value, origin in found
+        (value, "location")
+        for _, value in _location_params(location)
         if len(value) >= MIN_VALUE_LEN and not _is_hostname(value)
     ]
 
@@ -1525,7 +1552,6 @@ class Chains:
         self.flows = []
         self.links = []
         self.active = True
-        chains_registry.clear()
         self._set_filter(False)
         logging.log(ALERT, "chains: recording — do the action, then run `:chains.end`")
 
@@ -1537,7 +1563,6 @@ class Chains:
         self.active = False
         self.flows.sort(key=lambda flow: flow.timestamp_created or 0)
         self.links = derive(self.flows)
-        chains_registry.publish(self.flows, self.links)
         logging.log(
             ALERT,
             f"chains: {len(self.flows)} flow(s), {len(self.links)} link(s) "
@@ -1686,7 +1711,6 @@ class Chains:
         self.flows = []
         self.links = []
         self.active = False
-        chains_registry.clear()
         self._set_filter(False)
         logging.log(ALERT, "chains: wiped")
 
@@ -1713,20 +1737,10 @@ class Chains:
         self._set_filter(True)
 
     def _set_filter(self, on: bool) -> None:
-        try:
-            current = (
-                (ctx.options.view_filter or "").replace(CHAINS_BLOCK, "").strip(" &")
-            )
-        except AttributeError:
-            return
-
         if on:
-            if current and current != "~all":
-                ctx.options.view_filter = f"{CHAINS_BLOCK} & {current}"
-            else:
-                ctx.options.view_filter = CHAINS_BLOCK
+            _filter_add(CHAINS_BLOCK)
         else:
-            ctx.options.view_filter = current or "~all"
+            _filter_remove(CHAINS_BLOCK)
 
 
 addon = Chains()

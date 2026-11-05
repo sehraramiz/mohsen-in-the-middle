@@ -35,6 +35,30 @@ _META_KEYS = (
 )
 
 
+def _filter_add(block: str) -> None:
+    """AND `block` into the current view filter, preserving the existing expression."""
+    try:
+        current = ctx.options.view_filter or ""
+    except AttributeError:
+        return
+    current = current.replace(block, "").strip(" &")
+    if current and current != "~all":
+        ctx.options.view_filter = f"{block} & {current}"
+    else:
+        ctx.options.view_filter = block
+
+
+def _filter_remove(block: str | None) -> None:
+    """Drop `block`, restoring `~all` when nothing else remains."""
+    try:
+        current = ctx.options.view_filter or ""
+    except AttributeError:
+        return
+    if block:
+        current = current.replace(block, "").strip(" &")
+    ctx.options.view_filter = current or "~all"
+
+
 def _norm_url(url: str) -> str:
     try:
         parsed = urlparse(url)
@@ -330,17 +354,8 @@ class CallerId:
     @command.command("caller.clear")
     def caller_clear(self) -> None:
         """Clear caller tags and remove the caller view filter."""
-        try:
-            current = ctx.options.view_filter or "~all"
-        except AttributeError:
-            current = "~all"
-        if self._active_block:
-            current = current.replace(self._active_block, "").strip(" &")
+        _filter_remove(self._active_block)
         self._active_block = None
-        try:
-            ctx.options.view_filter = current or "~all"
-        except AttributeError:
-            pass
 
         cleared = 0
         for flow in ctx.master.view:
@@ -374,18 +389,9 @@ class CallerId:
         )
 
     def _set_filter(self, caller_id: str) -> None:
-        try:
-            current = ctx.options.view_filter or "~all"
-        except AttributeError:
-            return
-        if self._active_block:
-            current = current.replace(self._active_block, "").strip(" &")
-        block = f'((~meta "caller: {caller_id}"))'
-        self._active_block = block
-        if current and current != "~all":
-            ctx.options.view_filter = f"{block} & {current}"
-        else:
-            ctx.options.view_filter = block
+        _filter_remove(self._active_block)
+        self._active_block = f'((~meta "caller: {caller_id}"))'
+        _filter_add(self._active_block)
 
 
 addons = [CallerId()]
