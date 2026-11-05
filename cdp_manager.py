@@ -800,46 +800,69 @@ class CdpManager:
             _submit(cb, record)
 
     @command.command("cdp")
-    def cdp_command(self, action: str = "") -> None:
+    def cdp_usage(self) -> None:
+        """List the available CDP commands."""
+        logger.warning(
+            "usage: :cdp.on | :cdp.off | :cdp.status | :cdp.launch | :cdp.dedupe | :cdp.gc"
+        )
+
+    @command.command("cdp.on")
+    def cdp_on(self) -> None:
+        """Enable CDP script capture."""
         if not self._primary:
             logger.warning("cdp: duplicate manager instance ignored")
             return
-        if action == "off":
-            self._user_disabled = True
-            self.done()
-            logger.warning("cdp: disabled")
-        elif action == "on":
-            self._user_disabled = False
-            self._start()
-            logger.warning("cdp: enabled")
-        elif action == "launch":
-            self._launch_chrome()
-            logger.warning("cdp: launch requested")
-        elif action == "status":
-            if self._enabled:
-                if self._chrome_up:
-                    logger.warning(
-                        "cdp: connected (%d tabs, %d scripts saved)",
-                        len(self._tabs),
-                        self._script_count,
-                    )
-                else:
-                    logger.warning(
-                        "cdp: Chrome unreachable on %s:%d (try :cdp launch) — %d scripts saved",
-                        CDP_HOST,
-                        CDP_PORT,
-                        self._script_count,
-                    )
-            elif self._user_disabled:
-                logger.warning("cdp: disabled by user")
+        self._user_disabled = False
+        self._start()
+        logger.warning("cdp: enabled")
+
+    @command.command("cdp.off")
+    def cdp_off(self) -> None:
+        """Disable CDP script capture."""
+        if not self._primary:
+            logger.warning("cdp: duplicate manager instance ignored")
+            return
+        self._user_disabled = True
+        self.done()
+        logger.warning("cdp: disabled")
+
+    @command.command("cdp.status")
+    def cdp_status(self) -> None:
+        """Show CDP connection and capture status."""
+        if not self._primary:
+            logger.warning("cdp: duplicate manager instance ignored")
+            return
+        if self._enabled:
+            if self._chrome_up:
+                logger.warning(
+                    "cdp: connected (%d tabs, %d scripts saved)",
+                    len(self._tabs),
+                    self._script_count,
+                )
             else:
                 logger.warning(
-                    "cdp: not started (Chrome reachable on %s:%d?)",
+                    "cdp: Chrome unreachable on %s:%d (try :cdp.launch) — %d scripts saved",
                     CDP_HOST,
                     CDP_PORT,
+                    self._script_count,
                 )
+        elif self._user_disabled:
+            logger.warning("cdp: disabled by user")
         else:
-            logger.warning("usage: :cdp on|off|status|launch")
+            logger.warning(
+                "cdp: not started (Chrome reachable on %s:%d?)",
+                CDP_HOST,
+                CDP_PORT,
+            )
+
+    @command.command("cdp.launch")
+    def cdp_launch(self) -> None:
+        """Launch Chrome with the configured profile."""
+        if not self._primary:
+            logger.warning("cdp: duplicate manager instance ignored")
+            return
+        self._launch_chrome()
+        logger.warning("cdp: launch requested")
 
     @command.command("cdp.dedupe")
     def cdp_dedupe(self) -> None:
