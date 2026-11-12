@@ -32,7 +32,6 @@ CDP_POLL_INTERVAL: float = getattr(settings, "cdp_poll_interval", 2.0)
 CDP_TIMEOUT: float = getattr(settings, "cdp_timeout", 10.0)
 CDP_MAX_RECONNECT_DELAY: float = getattr(settings, "cdp_max_reconnect_delay", 30.0)
 CDP_RECONNECT_TIMEOUT: float = getattr(settings, "cdp_reconnect_timeout", 2.0)
-CDP_AUTO_LAUNCH: bool = getattr(settings, "cdp_auto_launch", True)
 CDP_USER_DATA_DIR: str = getattr(
     settings, "cdp_user_data_dir", "$HOME/.config/google-chrome-debug"
 )
@@ -541,7 +540,6 @@ class CdpManager:
         self._script_count: int = 0
         self._enabled: bool = False
         self._user_disabled: bool = False
-        self._launched_chrome: bool = False
         self._chrome_up: bool = False
         self._stop: bool = False
         self._primary: bool = register(self) is self
@@ -609,7 +607,6 @@ class CdpManager:
         if not _chrome_path:
             logger.warning("cdp: chrome binary not found")
             return
-        self._launched_chrome = True
         logger.warning(
             "cdp: launching %s --remote-debugging-port=%d",
             _chrome_path,
@@ -636,10 +633,9 @@ class CdpManager:
             else:
                 self._chrome_up = False
                 self._sync_tabs([])
-                if CDP_AUTO_LAUNCH and not self._launched_chrome:
-                    self._launch_chrome()
                 logger.warning(
-                    "cdp: Chrome unreachable on %s:%d, retrying in %ds...",
+                    "cdp: Chrome unreachable on %s:%d (start it or run :cdp.launch), "
+                    "retrying in %ds...",
                     CDP_HOST,
                     CDP_PORT,
                     int(delay),
