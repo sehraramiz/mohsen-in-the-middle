@@ -657,6 +657,19 @@ class CdpManager:
         except Exception:
             return None
 
+    def _fetch_browser_ws(self) -> str | None:
+        try:
+            req = urllib.request.Request(
+                f"http://{CDP_HOST}:{CDP_PORT}/json/version",
+                headers={"User-Agent": "mitmproxy-cdp"},
+            )
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=CDP_TIMEOUT) as resp:
+                ws_url: str | None = json.loads(resp.read()).get("webSocketDebuggerUrl")
+                return ws_url
+        except Exception:
+            return None
+
     def _sync_tabs(self, targets: list[dict]) -> None:
         current_ids: set[str] = set()
         for t in targets:
@@ -831,9 +844,10 @@ class CdpManager:
         if self._enabled:
             if self._chrome_up:
                 logger.warning(
-                    "cdp: connected (%d tabs, %d scripts saved)",
+                    "cdp: connected (%d tabs, %d scripts saved) ws=%s",
                     len(self._tabs),
                     self._script_count,
+                    self._fetch_browser_ws() or "?",
                 )
             else:
                 logger.warning(
