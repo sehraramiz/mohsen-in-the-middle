@@ -685,23 +685,27 @@ CHAINS_TEMPLATE = """<!doctype html>
   #left{flex:1;min-width:0;overflow:auto;padding:10px 14px}
   #detail{width:400px;min-width:320px;border-left:1px solid var(--line);overflow:auto;
     padding:12px 14px}
-  #detail h2{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
-    margin:16px 0 6px}
-  #detail .title{font:12px ui-monospace,monospace;font-weight:600;word-break:break-all}
+  main.detail-hidden #detail{display:none}
+  #detail summary{font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+    color:var(--muted);margin:16px 0 6px;cursor:pointer}
+  #detail summary:hover{color:var(--fg)}
+  #detail details[open]>summary{border-bottom:1px solid var(--line);padding-bottom:4px}
+  .dtop{display:flex;justify-content:flex-end;margin-bottom:2px}
+  #detail .title{font:12px ui-monospace,monospace;font-weight:600;overflow-wrap:anywhere}
   #detail code,#detail pre{font:11px ui-monospace,monospace}
   pre{background:#f6f6f8;padding:8px;border-radius:6px;overflow:auto;max-height:34vh;
     white-space:pre-wrap;word-break:break-word;margin:4px 0}
-  table.h{width:100%;border-collapse:collapse}
+  table.h{width:100%;border-collapse:collapse;table-layout:fixed}
   table.h td{border-bottom:1px solid #f0f0f2;padding:2px 4px;
-    font:11px ui-monospace,monospace;vertical-align:top;word-break:break-all}
-  table.h td:first-child{color:var(--muted);white-space:nowrap;width:38%}
+    font:11px ui-monospace,monospace;vertical-align:top;
+    word-break:normal;overflow-wrap:anywhere}
+  table.h td:first-child{color:var(--muted);white-space:normal;width:38%}
   .rel{font:11px ui-monospace,monospace;padding:2px 0;cursor:pointer;color:#a35a00}
   .rel:hover{text-decoration:underline}
   .whyhead{font:11px ui-monospace,monospace;color:#7a4a12;margin-top:6px;
-    word-break:break-all}
+    overflow-wrap:anywhere}
   .val{font:11px ui-monospace,monospace;background:#f6f6f8;border-radius:4px;
-    padding:3px 6px;margin:2px 0 6px;word-break:break-all}
-  .status{font:11px ui-monospace,monospace;margin-bottom:4px}
+    padding:3px 6px;margin:2px 0 6px;overflow-wrap:anywhere}
   .muted{color:var(--muted)}
   .chain{border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:#fff}
   .chain.hidden{display:none}
@@ -739,6 +743,7 @@ CHAINS_TEMPLATE = """<!doctype html>
   <span><i style="border-top:2px dashed #c9884a"></i>value</span>
 </span>
 <button id="reset" disabled title="restore every hidden step and host">reset view</button>
+<button id="toggleDetail" title="hide the details sidebar">hide details</button>
 <span id="hint">click a chain to expand · click a step to follow · hide via chips or right-click</span></header>
 <div id="hiddenbar" hidden><span class="lbl">hidden</span><span id="hiddenchips"></span></div>
 <main>
@@ -758,7 +763,8 @@ const state = {
   focus: null,
   hiddenHosts: new Set(),
   hiddenSteps: {},
-  visibleIds: new Set()
+  visibleIds: new Set(),
+  detailHidden: false
 };
 const graphEl = document.createElement("div");
 graphEl.className = "graph";
@@ -767,6 +773,15 @@ let cy = null;
 const q = $("q");
 const hitsEl = $("hits");
 $("meta").textContent = DATA.meta;
+
+function setDetailHidden(hidden) {
+  state.detailHidden = hidden;
+  document.querySelector("main").classList.toggle("detail-hidden", hidden);
+  $("toggleDetail").textContent = hidden ? "show details" : "hide details";
+  if (cy) { cy.resize(); fitGraph(); }
+}
+
+$("toggleDetail").onclick = () => setDetailHidden(!state.detailHidden);
 
 const STYLE = [
   { selector: "node", style: {
@@ -1113,6 +1128,9 @@ function wireJumps() {
   detail.querySelectorAll("[data-hide-host]").forEach(el => {
     el.onclick = () => toggleHost(el.dataset.hideHost);
   });
+  detail.querySelectorAll("[data-close-detail]").forEach(el => {
+    el.onclick = () => setDetailHidden(true);
+  });
 }
 
 function showNode(id) {
@@ -1121,26 +1139,30 @@ function showNode(id) {
   const incoming = DATA.links.filter(l => String(l.dst) === id);
   const outgoing = DATA.links.filter(l => String(l.src) === id);
   $("detail").innerHTML = `
+    <div class="dtop"><button data-close-detail title="close details">✕ close</button></div>
     <div class="title">#${f.step} ${esc(f.method)} ${esc(f.host)}${esc(f.path)}</div>
-    <div class="muted" style="font:11px ui-monospace,monospace;word-break:break-all">
+    <div class="muted" style="font:11px ui-monospace,monospace;overflow-wrap:anywhere">
       ${esc(f.ts)} · ${esc(f.url)}</div>
     <div class="acts">
       <button data-hide-step="${esc(id)}">hide this step</button>
       <button data-hide-host="${esc(f.host)}">hide ${esc(f.host)}</button>
     </div>
-    <h2>imports</h2>
-    ${incoming.length ? incoming.map(l => linkHtml(l, "in")).join("") :
-      '<p class="muted">none</p>'}
-    <h2>exports</h2>
-    ${outgoing.length ? outgoing.map(l => linkHtml(l, "out")).join("") :
-      '<p class="muted">none</p>'}
-    <h2>request</h2>
-    <table class="h">${kv(f.req.headers)}</table>
-    ${bodyHtml(f.req.body)}
-    <h2>response</h2>
-    <div class="status">${f.status ?? ""} ${esc(f.reason || "")}</div>
-    <table class="h">${kv(f.resp ? f.resp.headers : [])}</table>
-    ${bodyHtml(f.resp ? f.resp.body : null)}
+    <details><summary>imports (${incoming.length})</summary>
+      ${incoming.length ? incoming.map(l => linkHtml(l, "in")).join("") :
+        '<p class="muted">none</p>'}
+    </details>
+    <details><summary>exports (${outgoing.length})</summary>
+      ${outgoing.length ? outgoing.map(l => linkHtml(l, "out")).join("") :
+        '<p class="muted">none</p>'}
+    </details>
+    <details><summary>request · ${f.req.headers.length} header(s)</summary>
+      <table class="h">${kv(f.req.headers)}</table>
+      ${bodyHtml(f.req.body)}
+    </details>
+    <details><summary>response · ${f.status ?? "—"} ${esc(f.reason || "")}</summary>
+      <table class="h">${kv(f.resp ? f.resp.headers : [])}</table>
+      ${bodyHtml(f.resp ? f.resp.body : null)}
+    </details>
   `;
   wireJumps();
 }
@@ -1149,13 +1171,16 @@ function showEdge(id) {
   const l = links[id];
   if (!l) return;
   $("detail").innerHTML = `
+    <div class="dtop"><button data-close-detail title="close details">✕ close</button></div>
     <div class="title">#${DATA.stepOf[String(l.src)]} → #${DATA.stepOf[String(l.dst)]}</div>
     <div class="muted">${l.kind === "redirect" ? "redirect" : "value hand-off"}</div>
-    <h2>why</h2>
-    ${whyHtml(l)}
-    <h2>steps</h2>
-    <div class="rel" data-goto="${l.src}">from #${DATA.stepOf[String(l.src)]}</div>
-    <div class="rel" data-goto="${l.dst}">to #${DATA.stepOf[String(l.dst)]}</div>
+    <details><summary>why</summary>
+      ${whyHtml(l)}
+    </details>
+    <details><summary>steps</summary>
+      <div class="rel" data-goto="${l.src}">from #${DATA.stepOf[String(l.src)]}</div>
+      <div class="rel" data-goto="${l.dst}">to #${DATA.stepOf[String(l.dst)]}</div>
+    </details>
   `;
   wireJumps();
 }
