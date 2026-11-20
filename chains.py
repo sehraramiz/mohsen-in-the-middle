@@ -181,7 +181,7 @@ def _request_haystack(flow: http.HTTPFlow) -> str:
     request = flow.request
     parts = [
         request.url,
-        request.headers.get("Cookie", ""),
+        "\n".join(request.headers.get_all("Cookie") or []),
         "\n".join(f"{name}: {value}" for name, value in request.headers.items()),
     ]
 

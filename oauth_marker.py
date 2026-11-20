@@ -297,13 +297,12 @@ def _collect_request_values(flow: http.HTTPFlow) -> set[str]:
         else:
             values.add(value)
 
-    cookie = flow.request.headers.get("Cookie", "")
-    if cookie:
-        for part in cookie.split(";"):
+    for field in flow.request.headers.get_all("Cookie") or []:
+        for part in field.split(";"):
             part = part.strip()
             if "=" in part:
-                _, val = part.split("=", 1)
-                values.add(val.strip())
+                _, value = part.split("=", 1)
+                values.add(value.strip())
 
     return values
 

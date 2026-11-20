@@ -84,6 +84,29 @@ def host_in_scope(host: str) -> bool:
     return in_scope and not out_scope
 
 
+def cookie_pairs(headers: http.Headers) -> list[str]:
+    """Every cookie as an individual ``name=value`` string.
+
+    HTTP/2 requests may carry many ``cookie`` header fields; ``Headers.get``
+    folds them with ``", "``, which is not a cookie separator. Always read
+    them with ``get_all``.
+    """
+    pairs: list[str] = []
+    for field in headers.get_all("Cookie") or []:
+        pairs.extend(part.strip() for part in field.split(";") if part.strip())
+    return pairs
+
+
+def cookie_name(pair: str) -> str:
+    """The name part of a ``name=value`` cookie or ``Set-Cookie`` string."""
+    return pair.split("=", 1)[0].strip()
+
+
+def cookie_matches(name: str, patterns: list[str]) -> bool:
+    """Full-name regex match, so a pattern cannot accidentally eat near-misses."""
+    return any(re.fullmatch(pattern, name) for pattern in patterns)
+
+
 def scope_decorator(in_scope: list[str], out_scope: list[str]):
     def decorator(func: Callable) -> Callable:
         def wrapper(*args, **kwargs):
@@ -156,27 +179,21 @@ def load(loader: Loader) -> None:
     )
 
 
+@scope()
 def request(flow: http.HTTPFlow) -> None:
     if settings.remove_cookies:
-        cookie = flow.request.headers.get("Cookie", "")
-        if cookie:
-            parts = [c.strip() for c in cookie.split(";") if c.strip()]
-            kept = [
-                p
-                for p in parts
-                if not any(
-                    re.search(pat, p.split("=", 1)[0].strip())
-                    for pat in settings.remove_cookies
-                )
-            ]
+        pairs = cookie_pairs(flow.request.headers)
+        kept = [
+            pair
+            for pair in pairs
+            if not cookie_matches(cookie_name(pair), settings.remove_cookies)
+        ]
+        if len(kept) != len(pairs):
             if kept:
-                flow.request.headers["Cookie"] = "; ".join(kept)
+                flow.request.headers.set_all("Cookie", ["; ".join(kept)])
             else:
                 flow.request.headers.pop("Cookie", None)
 
-
-@scope()
-def request(flow: http.HTTPFlow) -> None:
     flow.request.headers.setdefault("x-mitm-trace-id", flow.id)
 
     for header_key, header_value in settings.include_headers:
@@ -197,17 +214,15 @@ def response(flow: http.HTTPFlow) -> None:
     if not set_cookies:
         return
     kept = [
-        sc
-        for sc in set_cookies
-        if not any(
-            re.search(pat, sc.split("=", 1)[0].strip())
-            for pat in settings.remove_cookies
-        )
+        set_cookie
+        for set_cookie in set_cookies
+        if not cookie_matches(cookie_name(set_cookie), settings.remove_cookies)
     ]
-    if kept:
-        flow.response.headers.set_all("set-cookie", kept)
-    else:
-        flow.response.headers.pop("set-cookie", None)
+    if len(kept) != len(set_cookies):
+        if kept:
+            flow.response.headers.set_all("set-cookie", kept)
+        else:
+            flow.response.headers.pop("set-cookie", None)
 
 
 @command.command("scopes")
