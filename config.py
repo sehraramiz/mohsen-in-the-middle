@@ -41,6 +41,22 @@ class Settings:
                     pattern = re.escape(line).replace(r"\*", ".*") + "$"
                     target.append(pattern)
 
+    def reload(self) -> list[str]:
+        changed = []
+        fresh = Settings()
+        fresh.project_name = self.project_name
+        for key, value in vars(fresh).items():
+            current = getattr(self, key)
+            if isinstance(current, list) and isinstance(value, list):
+                snapshot = list(current)
+                current[:] = value
+                if snapshot != value:
+                    changed.append(key)
+            elif current != value:
+                setattr(self, key, value)
+                changed.append(key)
+        return changed
+
     def _load_env(self) -> None:
         env_path = Path(".env")
         if not env_path.exists():
@@ -211,6 +227,29 @@ def show_scopes() -> None:
             lines.append(f"    {p}")
     else:
         lines.append("    (none)")
+    logging.log(ALERT, "\n".join(lines))
+
+
+@command.command("reload.env")
+def reload_env() -> None:
+    global derived_view_filter
+    changed = settings.reload()
+    new_filter = scope_filters()
+    if ctx.options.view_filter in ("", derived_view_filter):
+        ctx.options.update_known(view_filter=new_filter)
+        filter_note = "view filter refreshed"
+    else:
+        filter_note = "view filter left as-is (changed manually)"
+    derived_view_filter = new_filter
+
+    lines = ["Reloaded .env + inscope/outscope."]
+    if not Path(".env").exists():
+        lines.append("  .env not found — settings reset to defaults.")
+    if changed:
+        lines.append(f"  updated: {', '.join(changed)}")
+    else:
+        lines.append("  no changes")
+    lines.append(f"  {filter_note}")
     logging.log(ALERT, "\n".join(lines))
 
 
