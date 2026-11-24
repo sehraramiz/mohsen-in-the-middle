@@ -3,6 +3,7 @@ import json
 import logging
 import threading
 import time
+from collections import deque
 from urllib.parse import urlparse
 
 from mitmproxy import command, ctx, http
@@ -12,14 +13,17 @@ from cdp_registry import get as get_cdp
 
 logger = logging.getLogger(__name__)
 
-# Correlate a CDP request with a proxied flow by matching method + URL and
-# picking the closest timestamp within this window (seconds).
 WINDOW = 3.0
-# How long initiator records are kept around for later lookups.
-TTL = 180.0
+TTL = 20.0
+MAX_RECORDS = 20000
+FLOW_TTL = 15.0
 MAX_FLOWS = 10000
 MAX_STACK = 12
 SWEEP_THRESHOLD = 3000
+CHUNK = 500
+IDLE_POLL = 0.5
+BATCH_PAUSE = 0.02
+SWEEP_INTERVAL = 1.0
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -83,44 +87,76 @@ def _id_for(source: str) -> str:
 
 
 class CallerId:
+    """Tag flows with the JS that fired them.
+
+    Both sides of the correlation (CDP initiator records and proxied flows) are
+    queued and matched on a single background thread. The proxy hook only stores
+    a tuple, and flows are indexed by request key, so each flow is parsed and
+    examined once instead of rescanning the whole capture per CDP event.
+    """
+
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        self._cond = threading.Condition()
         self._by_key: dict[str, list[dict]] = {}
-        self._flows: dict[str, http.HTTPFlow] = {}
-        self._total: int = 0
+        self._flows_by_key: dict[str, dict[str, tuple[http.HTTPFlow, float]]] = {}
+        self._pending_flows: deque[tuple[str, str, float, http.HTTPFlow]] = deque()
+        self._pending_records: deque[dict] = deque()
+        self._total = 0
+        self._flow_count = 0
+        self._last_sweep = 0.0
+        self._flush_event = threading.Event()
+        self._flush_pending = False
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
         self._active_block: str | None = None
 
     def running(self) -> None:
         cm = get_cdp()
-        if cm:
-            cm.on_request(self._on_cdp_request)
-            logger.warning("caller_id: CDP initiator capture enabled")
-        else:
+        if cm is None:
             logger.warning(
                 "caller_id: CDP manager not available (load cdp_manager.py first)"
             )
+            return
+        cm.on_request(self._on_cdp_request)
+        if self._thread is None:
+            self._thread = threading.Thread(
+                target=self._run, name="caller_id", daemon=True
+            )
+            self._thread.start()
+        logger.warning("caller_id: CDP initiator capture enabled")
+
+    def done(self) -> None:
+        self._stop.set()
+        with self._cond:
+            self._cond.notify_all()
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+            self._thread = None
+
+    def request(self, flow: http.HTTPFlow) -> None:
+        if flow.request is None or self._thread is None:
+            return
+        with self._cond:
+            self._pending_flows.append(
+                (
+                    flow.request.method,
+                    flow.request.pretty_url,
+                    flow.request.timestamp_start,
+                    flow,
+                )
+            )
+            self._cond.notify()
 
     def _on_cdp_request(self, record: dict) -> None:
+        if self._thread is None:
+            return
         rec = self._prepare(record)
         if rec is None:
             return
-
-        key = rec["key"]
-        with self._lock:
-            self._by_key.setdefault(key, []).append(rec)
-            self._total += 1
-            if self._total > SWEEP_THRESHOLD:
-                self._sweep_locked(rec["_t"])
-            flows = list(self._flows.values())
-
-        for flow in flows:
-            if flow.metadata.get("caller") or rec.get("_used"):
-                continue
-            if _key(flow.request.method, flow.request.pretty_url) != key:
-                continue
-            if abs(rec["_t"] - flow.request.timestamp_start) <= WINDOW:
-                rec["_used"] = True
-                self._apply(flow, rec)
+        with self._cond:
+            self._pending_records.append(rec)
+            self._cond.notify()
 
     def _prepare(self, record: dict) -> dict | None:
         method = record.get("method", "") or ""
@@ -167,24 +203,67 @@ class CallerId:
             "_used": False,
         }
 
-    def request(self, flow: http.HTTPFlow) -> None:
-        if flow.request is None:
-            return
-        with self._lock:
-            self._flows[flow.id] = flow
-            if len(self._flows) > MAX_FLOWS:
-                self._flows.clear()
-                self._flows[flow.id] = flow
-            rec = self._claim_locked(
-                flow.request.method,
-                flow.request.pretty_url,
-                flow.request.timestamp_start,
-            )
-        if rec:
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            with self._cond:
+                if not self._pending_flows and not self._pending_records:
+                    self._cond.wait(IDLE_POLL)
+                flows = [
+                    self._pending_flows.popleft()
+                    for _ in range(min(CHUNK, len(self._pending_flows)))
+                ]
+                records = [
+                    self._pending_records.popleft()
+                    for _ in range(min(CHUNK, len(self._pending_records)))
+                ]
+                now = time.time()
+                if now - self._last_sweep >= SWEEP_INTERVAL:
+                    self._last_sweep = now
+                    self._sweep_flows_locked(now)
+                    if self._total > SWEEP_THRESHOLD:
+                        self._sweep_records_locked(now)
+
+            for rec in records:
+                self._ingest_record(rec)
+            for method, url, ts, flow in flows:
+                self._match_flow(method, url, ts, flow)
+
+            with self._cond:
+                if self._flush_pending and not self._pending_flows:
+                    if not self._pending_records:
+                        self._flush_pending = False
+                        self._flush_event.set()
+
+            if flows or records:
+                time.sleep(BATCH_PAUSE)
+
+    def _ingest_record(self, rec: dict) -> None:
+        key = rec["key"]
+        flow: http.HTTPFlow | None = None
+        with self._cond:
+            self._by_key.setdefault(key, []).append(rec)
+            self._total += 1
+            bucket = self._flows_by_key.get(key)
+            if bucket:
+                flow = self._claim_flow_locked(key, bucket, rec["_t"])
+                if flow is not None:
+                    rec["_used"] = True
+        if flow is not None:
             self._apply(flow, rec)
 
-    def _claim_locked(self, method: str, url: str, ts: float) -> dict | None:
-        recs = self._by_key.get(_key(method, url))
+    def _match_flow(
+        self, method: str, url: str, ts: float, flow: http.HTTPFlow
+    ) -> None:
+        key = _key(method, url)
+        with self._cond:
+            rec = self._claim_record_locked(key, ts)
+            if rec is None:
+                self._index_flow_locked(key, flow)
+        if rec is not None:
+            self._apply(flow, rec)
+
+    def _claim_record_locked(self, key: str, ts: float) -> dict | None:
+        recs = self._by_key.get(key)
         if not recs:
             return None
         best: dict | None = None
@@ -202,17 +281,96 @@ class CallerId:
             best["_used"] = True
         return best
 
-    def _sweep_locked(self, now: float) -> None:
+    def _claim_flow_locked(
+        self, key: str, bucket: dict[str, tuple[http.HTTPFlow, float]], ts: float
+    ) -> http.HTTPFlow | None:
+        best_id: str | None = None
+        best_delta: float | None = None
+        for fid, (flow, _expires) in bucket.items():
+            if flow.metadata.get("caller"):
+                continue
+            delta = abs(ts - flow.request.timestamp_start)
+            if delta > WINDOW:
+                continue
+            if best_delta is None or delta < best_delta:
+                best_id = fid
+                best_delta = delta
+        if best_id is None:
+            return None
+        flow, _expires = bucket.pop(best_id)
+        self._flow_count -= 1
+        if not bucket:
+            del self._flows_by_key[key]
+        return flow
+
+    def _index_flow_locked(self, key: str, flow: http.HTTPFlow) -> None:
+        bucket = self._flows_by_key.setdefault(key, {})
+        if flow.id in bucket:
+            return
+        bucket[flow.id] = (flow, time.time() + FLOW_TTL)
+        self._flow_count += 1
+        if self._flow_count > MAX_FLOWS:
+            self._sweep_flows_locked(time.time())
+            if self._flow_count > MAX_FLOWS:
+                self._flows_by_key.clear()
+                self._flow_count = 0
+
+    def _drop_flow_locked(self, key: str, flow_id: str) -> None:
+        bucket = self._flows_by_key.get(key)
+        if not bucket or bucket.pop(flow_id, None) is None:
+            return
+        self._flow_count -= 1
+        if not bucket:
+            del self._flows_by_key[key]
+
+    def _sweep_flows_locked(self, now: float) -> None:
+        for key in list(self._flows_by_key):
+            bucket = self._flows_by_key[key]
+            for fid, (flow, expires) in list(bucket.items()):
+                if expires <= now or flow.metadata.get("caller"):
+                    del bucket[fid]
+                    self._flow_count -= 1
+            if not bucket:
+                del self._flows_by_key[key]
+
+    def _sweep_records_locked(self, now: float) -> None:
         cutoff = now - TTL
         total = 0
         for key in list(self._by_key):
-            recs = [r for r in self._by_key[key] if r["_t"] >= cutoff]
+            recs = [
+                r for r in self._by_key[key] if not r.get("_used") and r["_t"] >= cutoff
+            ]
             if recs:
                 self._by_key[key] = recs
                 total += len(recs)
             else:
                 del self._by_key[key]
         self._total = total
+        if total > MAX_RECORDS:
+            self._trim_records_locked()
+
+    def _trim_records_locked(self) -> None:
+        flat = sorted(
+            ((r["_t"], key, r) for key, recs in self._by_key.items() for r in recs),
+            key=lambda item: item[0],
+        )
+        kept = flat[len(flat) - MAX_RECORDS :]
+        self._by_key = {}
+        for _ts, key, rec in kept:
+            self._by_key.setdefault(key, []).append(rec)
+        self._total = len(kept)
+
+    def _flush(self, timeout: float = 2.0) -> None:
+        """Process everything queued so far (used by the commands)."""
+        if self._thread is None:
+            return
+        with self._cond:
+            self._flush_event.clear()
+            self._flush_pending = True
+            self._cond.notify()
+        if not self._flush_event.wait(timeout):
+            with self._cond:
+                self._flush_pending = False
 
     def _apply(self, flow: http.HTTPFlow, rec: dict) -> None:
         caller_id = rec.get("id") or ""
@@ -247,12 +405,11 @@ class CallerId:
     def _ensure_tagged(self, flow: http.HTTPFlow) -> None:
         if flow.metadata.get("caller"):
             return
-        with self._lock:
-            rec = self._claim_locked(
-                flow.request.method,
-                flow.request.pretty_url,
-                flow.request.timestamp_start,
-            )
+        key = _key(flow.request.method, flow.request.pretty_url)
+        with self._cond:
+            rec = self._claim_record_locked(key, flow.request.timestamp_start)
+            if rec is not None:
+                self._drop_flow_locked(key, flow.id)
         if rec:
             self._apply(flow, rec)
 
@@ -309,6 +466,7 @@ class CallerId:
             logging.log(ALERT, "caller_id: no focused flow")
             return
 
+        self._flush()
         self._ensure_tagged(flow)
         caller_id = flow.metadata.get("caller")
         if not caller_id:
@@ -338,6 +496,7 @@ class CallerId:
             logging.log(ALERT, "caller_id: no focused flow")
             return
 
+        self._flush()
         self._ensure_tagged(flow)
         if not flow.metadata.get("caller"):
             logging.log(ALERT, "caller_id: no initiator recorded for the focused flow")
@@ -357,6 +516,11 @@ class CallerId:
         _filter_remove(self._active_block)
         self._active_block = None
 
+        with self._cond:
+            self._pending_flows.clear()
+            self._flows_by_key.clear()
+            self._flow_count = 0
+
         cleared = 0
         for flow in ctx.master.view:
             if flow.metadata.get("caller"):
@@ -368,9 +532,11 @@ class CallerId:
     @command.command("caller.status")
     def caller_status(self) -> None:
         """Show CDP initiator capture status."""
+        self._flush()
         cm = get_cdp()
-        with self._lock:
+        with self._cond:
             records = sum(len(v) for v in self._by_key.values())
+            pending = len(self._pending_flows) + len(self._pending_records)
         tagged = sum(1 for f in ctx.master.view if f.metadata.get("caller"))
 
         if cm is None:
@@ -385,7 +551,7 @@ class CallerId:
         logging.log(
             ALERT,
             f"caller_id: CDP {cdp}, {records} initiator record(s) tracked, "
-            f"{tagged} tagged flow(s)",
+            f"{pending} queued, {tagged} tagged flow(s)",
         )
 
     def _set_filter(self, caller_id: str) -> None:
